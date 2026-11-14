@@ -1,0 +1,38 @@
+{
+  "name": "@zenmux/opencode-oauth",
+  "version": "0.1.2",
+  "description": "ZenMux OAuth 2.0 PKCE provider plugin for OpenCode",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": "./index.mjs",
+  "files": [
+    "index.mjs",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "node --check index.mjs && node --check src/core.mjs",
+    "test": "npm run check && node --test",
+    "prepack": "npm test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZenMux/opencode-plugin.git"
+  },
+  "homepage": "https://github.com/ZenMux/opencode-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/ZenMux/opencode-plugin/issues"
+  },
+  "keywords": [
+    "opencode",
+    "zenmux",
+    "oauth",
+    "pkce",
+    "ai"
+  ],
+  "license": "MIT"
+}

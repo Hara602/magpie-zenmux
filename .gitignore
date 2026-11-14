@@ -1,0 +1,9 @@
+node_modules/
+*.zip
+*.tgz
+*.bundle
+dist/
+.DS_Store
+Thumbs.db
+*.zip.sha256
+.git-known-hosts

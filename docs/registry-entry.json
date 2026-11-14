@@ -1,0 +1,10 @@
+{
+  "package": "opencode-zenmux-auth",
+  "name": "ZenMux Builder Plan",
+  "icon": "https://zenmux.ai/docs/favicon.svg",
+  "providers": ["zenmux"],
+  "summary": {
+    "en": "ZenMux's Builder Plan (Free / Pro / Max / Ultra) on a subscription API key, with the rolling 5-hour and 7-day Flows and the monthly cap, read with a Management API key.",
+    "zh": "用 ZenMux 订阅 API Key 接入 Builder Plan（Free / Pro / Max / Ultra），通过 Management API Key 读取滚动的 5 小时 / 7 天 Flows 额度与月度上限。"
+  }
+}
