@@ -67,8 +67,9 @@ from the provider's row.
   fills only what `models.dev` leaves unsaid, plus every model `models.dev` does not
   know (those get the plugin's three fallback levels, low / medium / high). Since 0.1.6
   the levels come from magpie's own `models.dev` snapshot (`~/.cache/magpie/models.json`,
-  read-only): no extra download, and nothing is sent anywhere. Without that snapshot the
-  live catalogue is used as before. Only the models **your plan serves** are listed,
+  read-only): no extra download, and nothing is sent anywhere. A snapshot that is
+  missing, unreadable, or older than models.dev's level names falls back to the live
+  catalogue and the three levels. Only the models **your plan serves** are listed,
   because a model outside the plan answers `403`:
   - the plan is read from the Management API key's `subscription/detail` → `plan.tier`
     (`free` / `starter` / `pro` / `max` / `ultra`);

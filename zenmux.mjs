@@ -336,10 +336,12 @@ export function modelRow(m, base = {}, { subscription = false, api, dev } = {}) 
     : { input: liveInputs, output: liveOutputs }
 
   // A variants map the config already carries (the user's, or one magpie
-  // normalised) wins; then models.dev's levels; then our fallback, only for a
-  // model models.dev does not know.
+  // normalised) wins; then models.dev's levels; then our fallback, for a model
+  // models.dev does not know — or for one whose entry predates the
+  // reasoning_options field, when it says nothing of levels at all.
   const baseVariants = isObj(b.variants) && Object.keys(b.variants).length ? b.variants : undefined
-  const variants = baseVariants ?? modelsDevVariants(d) ?? (known || !reasoning ? undefined : EFFORTS)
+  const levelsSaid = known && Array.isArray(d.reasoning_options)
+  const variants = baseVariants ?? modelsDevVariants(d) ?? (reasoning && !levelsSaid ? EFFORTS : undefined)
 
   // A Builder Plan draws Flows, not dollars: leave cost off for subscription
   // keys so magpie doesn't price the plan in USD. For a pay-as-you-go key,

@@ -54,7 +54,8 @@ magpie 的 Models 页和 agent 的模型选择器里，模型元数据以 **mode
   三档兜底 low / medium / high。
 - 推理档位读的是 magpie 自己的 models.dev 快照（Linux `~/.cache/magpie/models.json`，
   macOS `~/Library/Caches/…`，Windows `%LocalAppData%\magpie\models.json`），**只读**：
-  不额外下载，也不往外发任何东西；快照不存在时退回实时目录的行为。
+  不额外下载，也不往外发任何东西；快照不存在、读不了，或早于 models.dev 的档位字段时，
+  退回实时目录 + 三档兜底。
 
 效果举例（models.dev 的 zenmux 条目说了算）：`moonshotai/kimi-k3` 只提供 `max` 一档，
 `deepseek/deepseek-v4.1-flash` 是 `low/high/max`，`anthropic/claude-fable-5.1` 是
@@ -69,7 +70,7 @@ magpie 的 Models 页和 agent 的模型选择器里，模型元数据以 **mode
 ├── package.json          # npm 名字、magpie 元数据（名称/图标/并发）、keywords 供 Plugins 搜索
 ├── index.mjs             # 插件：config / auth（methods、loader、usage）/ provider.models
 ├── zenmux.mjs            # 纯函数：额度映射、模型行构造、计划模型集、价格、过滤器（可单测）
-├── test/zenmux.test.mjs  # 31 个单测（node --test）
+├── test/zenmux.test.mjs  # 32 个单测（node --test）
 ├── README.md             # 英文 README（npm 页面 / GitHub 首页）
 ├── LICENSE
 └── docs/

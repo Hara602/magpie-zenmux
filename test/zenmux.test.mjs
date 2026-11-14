@@ -670,3 +670,25 @@ test("modelRow never says an image model gives text", () => {
   assert.equal(only.capabilities.output.text, undefined)
   assert.deepEqual(only.modalities.output, ["image"])
 })
+
+test("modelRow keeps our levels when a models.dev entry predates reasoning_options", () => {
+  const live = {
+    id: "x/old-entry",
+    display_name: "Old Entry",
+    input_modalities: ["text"],
+    output_modalities: ["text"],
+    capabilities: { reasoning: true },
+    context_length: 128000,
+    max_tokens: 8192,
+  }
+  // a snapshot from before models.dev named levels: the entry exists, says it
+  // reasons, and says nothing of which levels
+  const dev = { id: "x/old-entry", name: "Old Entry", reasoning: true, tool_call: true }
+  const row = modelRow(live, {}, { dev, subscription: true })
+  assert.equal(row.reasoning, true)
+  assert.deepEqual(Object.keys(row.variants), ["low", "medium", "high"])
+
+  // ...but an entry that names "toggle only" is an answer: no levels offered
+  const toggle = { ...dev, reasoning_options: [{ type: "toggle" }] }
+  assert.equal(modelRow(live, {}, { dev: toggle }).variants, undefined)
+})
