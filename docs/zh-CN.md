@@ -19,7 +19,7 @@ magpie 的插件就是 **OpenCode 的 provider 插件**（Bun 宿主，npm 包 /
 | --- | --- |
 | `config(cfg)` | 声明 provider（id、npm 包、api 基址、默认模型）。models.dev 已收录 `zenmux` 时这段可以留空，magpie 会自动合并它的 110 个模型元数据。 |
 | `auth` | 登录（`methods` + `prompts` + `authorize`）、每个账号的请求怎么发（`loader` 返回 `{baseURL, fetch}`）、额度怎么读（`usage`，magpie 自有钩子，OpenCode 忽略）。 |
-| `provider.models` | 这个账号能看到哪些模型（按计划过滤、补名字、价格、上下文）。 |
+| `provider.models` | 这个账号能看到哪些模型（按计划过滤；models.dev 认识的模型用 models.dev 的名字、限额、模态、能力和推理档位，实时目录只补 models.dev 没说到的）。 |
 
 ZenMux 的特殊之处只有两个：
 
@@ -42,6 +42,26 @@ magpie 能直接安装官方 OpenCode 插件来聊天（`magpie plugin add @zenm
 复用同一套聊天 API。两者都签 `zenmux` 时只有一个在服务（后添加者赢，
 `magpie plugin use <name> zenmux` 可指定），别同时装。
 
+### 模型信息跟 models.dev 对齐（0.1.6 起）
+
+magpie 的 Models 页和 agent 的模型选择器里，模型元数据以 **models.dev** 为准：
+
+- models.dev 收录的模型（当前 `zenmux` 条目约 110 个）：名字、上下文 / 输入 / 输出限额、
+  输入输出模态、能力位（reasoning、tool_call、attachment、temperature）、价格、发布日期、
+  推理档位（`reasoning_options` 里的 effort 值）都用 models.dev 的；ZenMux 实时目录只补
+  models.dev 没说的字段。
+- models.dev 没收录的模型（ZenMux 实时目录里另外约 100 个）：用实时目录，推理档位退回插件的
+  三档兜底 low / medium / high。
+- 推理档位读的是 magpie 自己的 models.dev 快照（Linux `~/.cache/magpie/models.json`，
+  macOS `~/Library/Caches/…`，Windows `%LocalAppData%\magpie\models.json`），**只读**：
+  不额外下载，也不往外发任何东西；快照不存在时退回实时目录的行为。
+
+效果举例（models.dev 的 zenmux 条目说了算）：`moonshotai/kimi-k3` 只提供 `max` 一档，
+`deepseek/deepseek-v4.1-flash` 是 `low/high/max`，`anthropic/claude-fable-5.1` 是
+`low/medium/high/xhigh/max`；`openai/gpt-6.1-terra` 不在 models.dev 的 zenmux 条目里，
+所以保持三档兜底。要自己收窄档位，仍可用 `magpie model efforts zenmux/<vendor>/<model> low,medium,high`
+（`--reset` 恢复）。
+
 ## 目录
 
 ```
@@ -49,7 +69,7 @@ magpie 能直接安装官方 OpenCode 插件来聊天（`magpie plugin add @zenm
 ├── package.json          # npm 名字、magpie 元数据（名称/图标/并发）、keywords 供 Plugins 搜索
 ├── index.mjs             # 插件：config / auth（methods、loader、usage）/ provider.models
 ├── zenmux.mjs            # 纯函数：额度映射、模型行构造、计划模型集、价格、过滤器（可单测）
-├── test/zenmux.test.mjs  # 12 个单测（node --test）
+├── test/zenmux.test.mjs  # 31 个单测（node --test）
 ├── README.md             # 英文 README（npm 页面 / GitHub 首页）
 ├── LICENSE
 └── docs/

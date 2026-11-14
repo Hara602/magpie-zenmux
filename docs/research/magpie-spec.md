@@ -279,6 +279,7 @@ provider: {
 - `disabled` 在 models hook 返回值里**不生效**；`status:"deprecated"` 会被 magpie 过滤。[A][B]
 - `free/rate/rateWas/serviceTiers/decides/searches/fast` 在 models hook 顶层**生效**（实测 `rate:"x0.5"`→0.5，serviceTiers 对象被归一成 id）。[A]
 - **models.dev 起点**：provider id 在 models.dev 里时，models hook 收到的 `provider.models` 已经含 models.dev 的条目（合并 config 后）。实测用 `auth.provider="deepseek"` 的探针，config 只声明 1 个模型，列表出现 **3 个**（models.dev 的 deepseek 模型被并入）。用未见过的 id（`zenmux`）最干净；若冲突见 §5。[A]
+- **models.dev 的推理档位到不了 models hook**：host 的 `fromModelsDev()`（0.1.3913，从二进制 strings 还原）只取 name/family/cost/limit/temperature/capabilities/release_date，`variants` 恒为 `{}`，models.dev 的 `reasoning_options`（`{type:"toggle"}` / `{type:"effort",values:[…]}`）被丢弃。所以插件返回的 `variants` 就是 magpie 看到的档位；要对齐 models.dev，只能读 magpie 自己的 models.dev 快照（`os.UserCacheDir()/magpie/models.json`，Windows `%LocalAppData%\magpie\models.json`、macOS `~/Library/Caches/magpie/models.json`）。0.1.6 起本插件这么做的：只读、缺失时退回实时目录 + 三档兜底。[A]
 - **失败语义**（三者等价，magpie 保留旧列表）：
   1. fetch 失败后 `return provider.models`（host 通过自己的 fetch 包装器记录 `tried/lastOk` 判定）；
   2. `throw`（保留旧列表，错误进日志/`listError`）；

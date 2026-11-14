@@ -60,10 +60,15 @@ from the provider's row.
 - **Provider `zenmux`** — agents reach models as `zenmux/deepseek/deepseek-v4.1-flash`,
   `zenmux/openai/gpt-6.1-terra`, … ZenMux's models are namespaced `<vendor>/<model>`,
   so the model id itself carries a slash; that is expected.
-- **Models** — magpie already has a `models.dev` entry for `zenmux`, so names, context
-  windows, modalities and reasoning levels come from there. The plugin asks ZenMux's
-  public `GET /api/v1/models` (219 chat/image/video/audio models) and returns the chat
-  ones, merged over `models.dev`. Only the models **your plan serves** are listed,
+- **Models** — for a model `models.dev` knows, the row is `models.dev`'s answer: name,
+  limits (context / input / output), modalities, capabilities, price, release date and
+  the reasoning levels `models.dev` lists for that model. The plugin asks ZenMux's
+  public `GET /api/v1/models` (219 chat/image/video/audio models); the live catalogue
+  fills only what `models.dev` leaves unsaid, plus every model `models.dev` does not
+  know (those get the plugin's three fallback levels, low / medium / high). Since 0.1.6
+  the levels come from magpie's own `models.dev` snapshot (`~/.cache/magpie/models.json`,
+  read-only): no extra download, and nothing is sent anywhere. Without that snapshot the
+  live catalogue is used as before. Only the models **your plan serves** are listed,
   because a model outside the plan answers `403`:
   - the plan is read from the Management API key's `subscription/detail` → `plan.tier`
     (`free` / `starter` / `pro` / `max` / `ultra`);
@@ -206,7 +211,7 @@ plugin is added through the app; a folder entry can also carry `"options"`:
 ## Testing
 
 ```sh
-node --test test/zenmux.test.mjs          # pure helpers: usage mapping, cost, filters
+node --test test/zenmux.test.mjs          # pure helpers: usage, cost, models.dev alignment
 
 sb=$(mktemp -d)
 m() { env HOME=$sb XDG_CONFIG_HOME=$sb/.config XDG_CACHE_HOME=$sb/.cache \

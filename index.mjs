@@ -18,6 +18,8 @@
 //   https://zenmux.ai/docs/api/platform/subscription-detail.html
 //   https://zenmux.ai/docs/api/openai/create-chat-completion.html
 
+import { readFileSync, statSync } from "node:fs"
+
 import {
   API as ZENMUX_API,
   ANY_KEY_RE,
@@ -37,6 +39,7 @@ import {
   managementKeyOf,
   matches,
   modelRow,
+  modelsDevCachePaths,
   planModelSets,
   subscriptionToUsage,
 } from "./zenmux.mjs"
@@ -48,12 +51,37 @@ const MANAGEMENT_API = (process.env.ZENMUX_MANAGEMENT_API_BASE || ZENMUX_MANAGEM
 const PUBLIC_API = (process.env.ZENMUX_PUBLIC_API_BASE || ZENMUX_PUBLIC_API).replace(/\/+$/, "")
 
 const DEFAULT_MODELS = {
-  // Before the first sign-in magpie needs a model list to show. models.dev
-  // already knows the `zenmux` provider, so this is only a fallback.
+  // Last resort, for a host with no models.dev catalogue whose live list also
+  // fails: magpie still has a few models to show before the next try.
   "anthropic/claude-fable-5.2": { name: "Anthropic: Claude Fable 5.2", reasoning: true, tool_call: true, limit: { context: 200000, output: 64000 } },
   "openai/gpt-6.1-terra": { name: "OpenAI: GPT-6.1 Terra", reasoning: true, tool_call: true, limit: { context: 1050000, output: 128000 } },
   "deepseek/deepseek-v4.1-flash": { name: "DeepSeek: DeepSeek V4.1 Flash", reasoning: true, tool_call: true, limit: { context: 1000000, output: 384000 } },
   "moonshotai/kimi-k3.1-pro": { name: "MoonshotAI: Kimi K3.1 Pro", reasoning: true, tool_call: true, limit: { context: 1048576, output: 458752 } },
+}
+
+// models.dev's catalogue as magpie keeps it. The plugin host hands the models
+// hook a Model built from that catalogue, but its reasoning levels are not part
+// of that Model, so the per-model levels are read from magpie's own models.dev
+// snapshot: the same bytes, no extra download and nothing sent anywhere. A
+// missing or unreadable snapshot is not an error — the live catalogue and our
+// fallback levels take over.
+let modelsDevCache = { file: "", mtime: 0, models: {} }
+
+function modelsDevModels(env = process.env) {
+  for (const file of modelsDevCachePaths(env)) {
+    try {
+      const st = statSync(file)
+      if (modelsDevCache.file === file && modelsDevCache.mtime === st.mtimeMs) return modelsDevCache.models
+      const data = JSON.parse(readFileSync(file, "utf8"))
+      const provider = isObj(data?.[PROVIDER]) ? data[PROVIDER] : {}
+      const models = isObj(provider.models) ? provider.models : {}
+      modelsDevCache = { file, mtime: st.mtimeMs, models }
+      return models
+    } catch {
+      // Not there or not readable: try the next place magpie might keep it.
+    }
+  }
+  return {}
 }
 
 async function fetchModels(key, { signal } = {}) {
@@ -374,15 +402,16 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
   const includeNonChat = options?.includeNonChat === undefined ? true : options.includeNonChat === true || options.includeNonChat === "true"
 
   return {
-    // The provider and its default models, before anyone signs in. models.dev
-    // lists `zenmux` itself, so ??= leaves that entry in place.
+    // The provider before anyone signs in. models.dev lists `zenmux` itself, so
+    // its catalogue is the model list; seeding models here would overwrite the
+    // catalogue's names and limits field by field. DEFAULT_MODELS is only the
+    // last resort, when models.dev and ZenMux are both unavailable.
     config: async (cfg) => {
       cfg.provider ??= {}
       cfg.provider[PROVIDER] ??= {
         name: "ZenMux",
         npm: NPM,
         api: API,
-        models: DEFAULT_MODELS,
       }
     },
 
@@ -578,7 +607,10 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
     provider: {
       id: PROVIDER,
       async models(provider, { auth } = {}) {
-        const base = isObj(provider?.models) ? provider.models : DEFAULT_MODELS
+        // models.dev's entries (the host builds them from its catalogue) are
+        // the base; DEFAULT_MODELS is only for a host with no catalogue.
+        const merged = isObj(provider?.models) ? provider.models : {}
+        const base = Object.keys(merged).length ? merged : DEFAULT_MODELS
         // Signed out this still works: the catalogue is public, and magpie's
         // bundled models.dev list is smaller than ZenMux's (it has no qwen3.8,
         // for one). Without a key there is no plan to filter by.
@@ -614,6 +646,10 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
           }
         }
 
+        // models.dev's own entries, for the reasoning levels models.dev
+        // names. Absent (a magpie with no snapshot yet) is fine.
+        const dev = modelsDevModels()
+
         const build = (filter) => {
           const out = {}
           for (const m of live) {
@@ -622,7 +658,11 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
             if (filter && !filter.has(m.id)) continue
             if (include.length && !include.some((p) => matches(m.id, p))) continue
             if (exclude.length && exclude.some((p) => matches(m.id, p))) continue
-            out[m.id] = modelRow(m, base?.[m.id], { subscription, api: { id: m.id, url: API, npm: NPM } })
+            out[m.id] = modelRow(m, base?.[m.id], {
+              subscription,
+              api: { id: m.id, url: API, npm: NPM },
+              dev: dev[m.id],
+            })
           }
           return out
         }
@@ -639,7 +679,13 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
           if (models[pattern] || pattern.includes("*") || pattern.endsWith("/")) continue
           const known = base?.[pattern]
           const one = live.find((m) => m.id === pattern)
-          if (one) models[pattern] = modelRow(one, known, { subscription, api: { id: one.id, url: API, npm: NPM } })
+          if (one) {
+            models[pattern] = modelRow(one, known, {
+              subscription,
+              api: { id: one.id, url: API, npm: NPM },
+              dev: dev[one.id],
+            })
+          }
         }
         return models
       },
@@ -659,6 +705,7 @@ export const _internal = {
   subscriptionToUsage,
   isChatModel,
   modelRow,
+  modelsDevModels,
   entries,
   matches,
   planModelSets,

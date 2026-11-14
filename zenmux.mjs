@@ -1,6 +1,8 @@
 // Pure helpers for the ZenMux Builder Plan plugin. No network here: everything
 // that talks to ZenMux lives in index.mjs, so this file is easy to unit-test.
 
+import { homedir } from "node:os"
+
 export const PROVIDER = "zenmux"
 export const API = "https://zenmux.ai/api/v1"
 export const MANAGEMENT_API = "https://zenmux.ai/api/v1/management"
@@ -8,14 +10,109 @@ export const MANAGEMENT_API = "https://zenmux.ai/api/v1/management"
 export const PUBLIC_API = "https://zenmux.ai/api"
 export const NPM = "@ai-sdk/openai-compatible"
 
-// The reasoning levels offered for a model whose own metadata says it reasons.
-// models.dev (which magpie merges for the `zenmux` provider id) usually gives a
-// better per-model list; this is only the fallback for a model it doesn't know.
+// The reasoning levels offered for a model whose own metadata says it reasons
+// but whose models.dev entry names no level. models.dev (which magpie merges
+// for the `zenmux` provider id) usually gives a better per-model list; this is
+// the fallback for a model it doesn't know.
 export const EFFORTS = Object.freeze({
   low: Object.freeze({}),
   medium: Object.freeze({}),
   high: Object.freeze({}),
 })
+
+// A level an agent can pick is a plain word; anything else in a vendor's list
+// is a sentence, not a level, and does not belong in a model picker.
+const LEVEL_RE = /^[A-Za-z][A-Za-z0-9_-]*$/
+
+// modelsDevLevels lists the effort levels a models.dev entry names, in the
+// entry's own order. `reasoning_options` is where models.dev says them: a
+// toggle for thinking on/off, an effort list for the levels the model takes.
+export function modelsDevLevels(dev) {
+  const levels = []
+  const options = Array.isArray(dev?.reasoning_options) ? dev.reasoning_options : []
+  for (const option of options) {
+    if (!isObj(option) || option.type !== "effort") continue
+    for (const value of Array.isArray(option.values) ? option.values : []) {
+      const level = typeof value === "string" ? value.trim() : ""
+      if (!LEVEL_RE.test(level) || levels.includes(level)) continue
+      levels.push(level)
+    }
+  }
+  return levels
+}
+
+// modelsDevVariants is the variants map models.dev implies for a model: its
+// effort levels, or the variants an older models.dev catalogue carried.
+// Undefined is a real answer — models.dev knows the model but names no level
+// (a toggle only), so the vendor's default is all an agent should pick.
+export function modelsDevVariants(dev) {
+  if (!isObj(dev)) return undefined
+  const levels = modelsDevLevels(dev)
+  if (levels.length) return Object.fromEntries(levels.map((level) => [level, {}]))
+  if (isObj(dev.variants) && Object.keys(dev.variants).length) return dev.variants
+  return undefined
+}
+
+// MODALITY_KINDS are the kinds magpie's capabilities name, in its order.
+const MODALITY_KINDS = ["text", "image", "audio", "video", "pdf"]
+
+// modalityMap is a models.dev modalities list as capabilities says it: each
+// kind true or false, text when the list is empty (magpie's own reading).
+function modalityMap(list) {
+  const said = Array.isArray(list) ? list : []
+  return Object.fromEntries(MODALITY_KINDS.map((kind) => [kind, said.includes(kind) || (kind === "text" && !said.length)]))
+}
+
+// saidKinds is whether a capabilities.input/output is someone's answer: an
+// object of booleans that is more than a bare { text: true }, the value the
+// host writes for a model nobody said anything about.
+function saidKinds(caps) {
+  if (!isObj(caps)) return false
+  const keys = Object.keys(caps).filter((key) => typeof caps[key] === "boolean")
+  if (!keys.length) return false
+  return keys.length > 1 || keys[0] !== "text" || caps.text !== true
+}
+
+// positive keeps a stated limit; a zero there is models.dev's "not said" (the
+// internal Model defaults it to 0), so the live catalogue can fill it in.
+function positive(value) {
+  const n = num(value)
+  return n !== undefined && n > 0 ? n : undefined
+}
+
+// joinPath joins path pieces with "/", which every OS Node runs on accepts,
+// trimming the separators the pieces already carry.
+function joinPath(...parts) {
+  return parts
+    .filter((part) => typeof part === "string" && part.trim())
+    .map((part, index) => (index === 0 ? part.trim().replace(/[\\/]+$/, "") : part.trim().replace(/^[\\/]+|[\\/]+$/g, "")))
+    .join("/")
+}
+
+const text = (value) => (typeof value === "string" ? value.trim() : "")
+
+// modelsDevCachePaths are the places magpie may keep its models.dev snapshot,
+// in the order magpie itself would look: Go's os.UserCacheDir for the running
+// platform, then models.json in magpie's folder there. magpie leaves a link at
+// the old place when its data is moved, so the default places keep working.
+export function modelsDevCachePaths(env = process.env, platform = process.platform, home = homedir()) {
+  const candidates = []
+  const cache = (dir) => {
+    const base = text(dir)
+    if (base) candidates.push(joinPath(base, "magpie", "models.json"))
+  }
+  if (platform === "win32") {
+    cache(text(env?.LOCALAPPDATA))
+    if (text(home)) cache(joinPath(text(home), "AppData", "Local"))
+  } else if (platform === "darwin") {
+    if (text(home)) cache(joinPath(text(home), "Library", "Caches"))
+  } else {
+    cache(text(env?.XDG_CACHE_HOME))
+    if (text(home)) cache(joinPath(text(home), ".cache"))
+  }
+  // Windows spells the same place C:\… or C:/…; one candidate is enough.
+  return [...new Set(candidates.map((path) => path.replace(/\\/g, "/")))]
+}
 
 // ZenMux renamed its key prefixes on 2026-11-10: subscription keys are
 // sk-subs-…, pay-as-you-go keys sk-payg-…, Management API keys sk-mgmt-….
@@ -154,56 +251,133 @@ export function isChatModel(m) {
   return true
 }
 
-// modelRow turns one GET /api/v1/models entry into an OpenCode Model, keeping
-// whatever models.dev already knew about that id (variants, interleaving, …).
-export function modelRow(m, base = {}, { subscription = false, api } = {}) {
+// modelRow turns one GET /api/v1/models entry into an OpenCode Model.
+//
+// For a model models.dev knows, the row is models.dev's answer: magpie hands
+// the models hook a Model built from its catalogue (that is `base`), and `dev`
+// is the catalogue entry itself, which still carries the reasoning levels
+// models.dev names for the model. The live ZenMux entry only fills what
+// models.dev leaves unsaid. A model models.dev does not know is built from the
+// live entry, with our three fallback levels when it reasons.
+export function modelRow(m, base = {}, { subscription = false, api, dev } = {}) {
   const b = isObj(base) ? base : {}
+  const d = isObj(dev) ? dev : undefined
+  const known = d !== undefined
   const { cost: baseCost, ...rest } = b
-  const liveCost = subscription ? undefined : costOf(m)
-  const inputs = Array.isArray(m.input_modalities) ? m.input_modalities : ["text"]
-  const outputs = Array.isArray(m.output_modalities) ? m.output_modalities : ["text"]
-  const image = inputs.includes("image")
-  const reasoning =
-    m?.capabilities?.reasoning === true || b?.capabilities?.reasoning === true || b?.reasoning === true
-  const toolcall = b?.capabilities?.toolcall ?? b?.tool_call ?? true
-  const context = num(m.context_length) ?? num(b?.limit?.context)
-  const output = num(m.max_tokens) ?? num(b?.limit?.output)
-  // models.dev sometimes carries an empty variants map; that is "no levels
-  // known", not "a model with no reasoning", so fall back to ours.
-  const knownVariants = isObj(b?.variants) && Object.keys(b.variants).length ? b.variants : undefined
-  const variants = knownVariants ?? (reasoning ? EFFORTS : undefined)
+  const caps = isObj(b.capabilities) ? b.capabilities : {}
 
-  const inputCaps = Object.fromEntries(inputs.map((t) => [t, true]))
-  const outputCaps = Object.fromEntries(outputs.map((t) => [t, true]))
+  const liveInputs = Array.isArray(m.input_modalities) && m.input_modalities.length ? m.input_modalities : ["text"]
+  const liveOutputs = Array.isArray(m.output_modalities) && m.output_modalities.length ? m.output_modalities : ["text"]
+  const liveName = typeof m.display_name === "string" && m.display_name ? m.display_name : undefined
+  const baseName = typeof b.name === "string" && b.name ? b.name : undefined
+  const devName = typeof d?.name === "string" && d.name ? d.name : undefined
+  const name = known ? baseName ?? devName ?? liveName ?? m.id : liveName ?? baseName ?? m.id
+
+  const reasoning =
+    typeof caps.reasoning === "boolean"
+      ? caps.reasoning
+      : typeof b.reasoning === "boolean"
+        ? b.reasoning
+        : known
+          ? d.reasoning === true
+          : m?.capabilities?.reasoning === true
+  const toolcall =
+    typeof caps.toolcall === "boolean"
+      ? caps.toolcall
+      : typeof b.tool_call === "boolean"
+        ? b.tool_call
+        : known && typeof d.tool_call === "boolean"
+          ? d.tool_call
+          : true
+  const attachment =
+    typeof caps.attachment === "boolean"
+      ? caps.attachment
+      : typeof b.attachment === "boolean"
+        ? b.attachment
+        : known && typeof d.attachment === "boolean"
+          ? d.attachment
+          : liveInputs.includes("image")
+  const temperature =
+    typeof caps.temperature === "boolean"
+      ? caps.temperature
+      : typeof b.temperature === "boolean"
+        ? b.temperature
+        : known && typeof d.temperature === "boolean"
+          ? d.temperature
+          : undefined
+
+  const baseLimit = isObj(b.limit) ? b.limit : {}
+  const devLimit = isObj(d?.limit) ? d.limit : {}
+  const context = positive(baseLimit.context) ?? positive(devLimit.context) ?? num(m.context_length)
+  const output = positive(baseLimit.output) ?? positive(devLimit.output) ?? num(m.max_tokens)
+  const limitInput = num(baseLimit.input) ?? num(devLimit.input)
+
+  // models.dev says which kinds a model takes and gives; the live entry fills
+  // that in only when models.dev said nothing (a model it does not know).
+  const devInput = Array.isArray(d?.modalities?.input) ? modalityMap(d.modalities.input) : undefined
+  const devOutput = Array.isArray(d?.modalities?.output) ? modalityMap(d.modalities.output) : undefined
+  const inputCaps = saidKinds(caps.input)
+    ? { ...caps.input, text: true }
+    : saidKinds(devInput)
+      ? { ...devInput, text: true }
+      : { text: true, ...Object.fromEntries(liveInputs.map((kind) => [kind, true])) }
+  // Output keeps models.dev's answer as it is: an image model gives images,
+  // and saying text too would tell an agent it can chat with it.
+  const outputCaps = saidKinds(caps.output)
+    ? { ...caps.output }
+    : saidKinds(devOutput)
+      ? { ...devOutput }
+      : Object.fromEntries(liveOutputs.map((kind) => [kind, true]))
+  const modalities = known
+    ? {
+        input: MODALITY_KINDS.filter((kind) => inputCaps[kind] === true),
+        output: MODALITY_KINDS.filter((kind) => outputCaps[kind] === true),
+      }
+    : { input: liveInputs, output: liveOutputs }
+
+  // A variants map the config already carries (the user's, or one magpie
+  // normalised) wins; then models.dev's levels; then our fallback, only for a
+  // model models.dev does not know.
+  const baseVariants = isObj(b.variants) && Object.keys(b.variants).length ? b.variants : undefined
+  const variants = baseVariants ?? modelsDevVariants(d) ?? (known || !reasoning ? undefined : EFFORTS)
+
+  // A Builder Plan draws Flows, not dollars: leave cost off for subscription
+  // keys so magpie doesn't price the plan in USD. For a pay-as-you-go key,
+  // models.dev's price wins, else ZenMux's own pricings.
+  const liveCost = subscription ? undefined : costOf(m)
+  const cost = subscription ? undefined : isObj(baseCost) ? baseCost : liveCost
 
   return {
     ...rest,
     id: m.id,
-    name: typeof m.display_name === "string" && m.display_name ? m.display_name : b?.name ?? m.id,
-    ...(context !== undefined || output !== undefined
-      ? { limit: { ...(context !== undefined ? { context } : {}), ...(output !== undefined ? { output } : {}) } }
+    name,
+    ...(context !== undefined || limitInput !== undefined || output !== undefined
+      ? {
+          limit: {
+            ...(context !== undefined ? { context } : {}),
+            ...(limitInput !== undefined ? { input: limitInput } : {}),
+            ...(output !== undefined ? { output } : {}),
+          },
+        }
       : {}),
     reasoning,
     tool_call: !!toolcall,
-    modalities: { input: inputs, output: outputs },
+    modalities,
     ...(api && !isObj(b?.api) ? { api } : {}),
     ...(!b?.release_date && typeof m.publish_time === "string" && m.publish_time
       ? { release_date: m.publish_time }
       : {}),
     capabilities: {
-      ...(isObj(b?.capabilities) ? b.capabilities : {}),
+      ...caps,
       reasoning,
       toolcall: !!toolcall,
-      attachment: image || b?.capabilities?.attachment === true,
-      input: { ...(isObj(b?.capabilities?.input) ? b.capabilities.input : {}), text: true, ...inputCaps },
-      output: { ...(isObj(b?.capabilities?.output) ? b.capabilities.output : {}), ...outputCaps },
+      attachment,
+      ...(temperature !== undefined ? { temperature } : {}),
+      input: inputCaps,
+      output: outputCaps,
     },
     ...(variants ? { variants } : {}),
-    // A Builder Plan draws Flows, not dollars: leave cost off for subscription
-    // keys so magpie doesn't price the plan in USD. For a pay-as-you-go key,
-    // models.dev's price wins, else ZenMux's own pricings.
-    ...(baseCost && !subscription ? { cost: baseCost } : {}),
-    ...(liveCost ? { cost: liveCost } : {}),
+    ...(cost ? { cost } : {}),
   }
 }
 

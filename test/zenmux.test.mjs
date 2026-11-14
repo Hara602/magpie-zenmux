@@ -1,5 +1,8 @@
 // Run with: node --test   (Node 20+; Bun's `bun test` runs it too)
 import assert from "node:assert/strict"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { test } from "node:test"
 
 import {
@@ -8,10 +11,13 @@ import {
   isChatModel,
   matches,
   modelRow,
+  modelsDevCachePaths,
+  modelsDevLevels,
+  modelsDevVariants,
   planModelSets,
   subscriptionToUsage,
 } from "../zenmux.mjs"
-import { _internal } from "../index.mjs"
+import { ZenMuxBuilderAuthPlugin, _internal } from "../index.mjs"
 
 // The response body from
 // https://zenmux.ai/docs/api/platform/subscription-detail.html
@@ -332,4 +338,335 @@ test("isKeyRefusal marks a dead key but not a model outside the plan", () => {
   assert.equal(isKeyRefusal(403, '{"error":{"message":"model not_available: this model is not in your plan"}}'), false)
   assert.equal(isKeyRefusal(401, ""), true)
   assert.equal(isKeyRefusal(429, "slow down"), false)
+})
+// ---- models.dev alignment ----------------------------------------------------
+//
+// models.dev's provider-scoped entry for a model: `reasoning_options` is where
+// models.dev names the reasoning levels, which the live ZenMux catalogue never
+// says. magpie hands the models hook the entry as a Model (base below); the
+// levels only survive in the raw entry (dev).
+const DEV_DEEPSEEK = {
+  id: "deepseek/deepseek-v4.1-flash",
+  name: "DeepSeek V4.1 Flash",
+  description: "DeepSeek V4.1 Flash model for reasoning and agentic coding",
+  family: "deepseek-flash",
+  attachment: true,
+  reasoning: true,
+  reasoning_options: [
+    { type: "toggle" },
+    { type: "effort", values: ["low", "high", "max"] },
+  ],
+  tool_call: true,
+  interleaved: { field: "reasoning_content" },
+  structured_output: true,
+  temperature: true,
+  release_date: "2026-09-10",
+  modalities: { input: ["text", "image"], output: ["text"] },
+  limit: { context: 1000000, output: 384000 },
+  cost: { input: 0.075, output: 0.3, cache_read: 0.0015 },
+}
+
+const BASE_DEEPSEEK = {
+  id: "deepseek/deepseek-v4.1-flash",
+  providerID: "zenmux",
+  name: "DeepSeek V4.1 Flash",
+  family: "deepseek-flash",
+  api: { id: "deepseek/deepseek-v4.1-flash", url: "https://zenmux.ai/api/v1", npm: "@ai-sdk/openai-compatible" },
+  status: "active",
+  headers: {},
+  options: {},
+  cost: { input: 0.075, output: 0.3, cache: { read: 0.0015, write: 0 } },
+  limit: { context: 1000000, output: 384000 },
+  capabilities: {
+    temperature: true,
+    reasoning: true,
+    attachment: true,
+    toolcall: true,
+    input: { text: true, image: true, audio: false, video: false, pdf: false },
+    output: { text: true, image: false, audio: false, video: false, pdf: false },
+    interleaved: { field: "reasoning_content" },
+  },
+  release_date: "2026-09-10",
+  variants: {},
+}
+
+const LIVE_DEEPSEEK = {
+  id: "deepseek/deepseek-v4.1-flash",
+  object: "model",
+  display_name: "DeepSeek: DeepSeek V4.1 Flash 1017",
+  input_modalities: ["image", "text", "file"],
+  output_modalities: ["text"],
+  capabilities: { reasoning: true },
+  context_length: 1000000,
+  max_tokens: 384000,
+  pricings: { prompt: [{ value: 0.15 }], completion: [{ value: 0.6 }] },
+  publish_time: "2026-10-17",
+}
+
+const DEV_KIMI = {
+  id: "moonshotai/kimi-k3",
+  name: "Kimi K3",
+  attachment: true,
+  reasoning: true,
+  reasoning_options: [{ type: "toggle" }, { type: "effort", values: ["max"] }],
+  tool_call: true,
+  temperature: false,
+  release_date: "2026-07-16",
+  modalities: { input: ["text", "image", "video"], output: ["text"] },
+  limit: { context: 1048576, output: 131072 },
+  cost: { input: 3, output: 15, cache_read: 0.3 },
+}
+
+const BASE_KIMI = {
+  ...BASE_DEEPSEEK,
+  id: "moonshotai/kimi-k3",
+  name: "Kimi K3",
+  family: "kimi-k3",
+  api: { id: "moonshotai/kimi-k3", url: "https://zenmux.ai/api/v1", npm: "@ai-sdk/openai-compatible" },
+  cost: { input: 3, output: 15, cache: { read: 0.3, write: 0 } },
+  limit: { context: 1048576, output: 131072 },
+  capabilities: {
+    temperature: false,
+    reasoning: true,
+    attachment: true,
+    toolcall: true,
+    input: { text: true, image: true, audio: false, video: true, pdf: false },
+    output: { text: true, image: false, audio: false, video: false, pdf: false },
+  },
+}
+
+const LIVE_KIMI = {
+  id: "moonshotai/kimi-k3",
+  display_name: "MoonshotAI: Kimi K3",
+  input_modalities: ["text", "image", "video"],
+  output_modalities: ["text"],
+  capabilities: { reasoning: true },
+  context_length: 1048576,
+  max_tokens: 262144,
+  pricings: { prompt: [{ value: 3 }], completion: [{ value: 15 }] },
+  publish_time: "2026-07-17",
+}
+
+const DEV_TOGGLE = {
+  id: "x/toggle-only",
+  name: "Toggle Only",
+  reasoning: true,
+  reasoning_options: [{ type: "toggle" }],
+  tool_call: true,
+  modalities: { input: ["text"], output: ["text"] },
+  limit: { context: 128000, output: 8192 },
+}
+
+test("modelsDevLevels reads models.dev's reasoning_options in order", () => {
+  assert.deepEqual(modelsDevLevels(DEV_DEEPSEEK), ["low", "high", "max"])
+  assert.deepEqual(modelsDevLevels(DEV_KIMI), ["max"])
+  assert.deepEqual(modelsDevLevels({ reasoning_options: [{ type: "toggle" }] }), [])
+  assert.deepEqual(modelsDevLevels({ reasoning_options: [{ type: "effort", values: ["low", "low", " "] }] }), ["low"])
+  assert.deepEqual(modelsDevLevels(undefined), [])
+})
+
+test("modelsDevVariants maps levels to variants and keeps 'none named' distinct", () => {
+  assert.deepEqual(modelsDevVariants(DEV_KIMI), { max: {} })
+  assert.deepEqual(modelsDevVariants({ variants: { low: {}, high: {} } }), { low: {}, high: {} })
+  // models.dev knows the model but names no level: no favourites, not a fallback
+  assert.equal(modelsDevVariants({ reasoning: true, reasoning_options: [{ type: "toggle" }] }), undefined)
+  assert.equal(modelsDevVariants(undefined), undefined)
+})
+
+test("modelRow takes models.dev's answer for a model it knows", () => {
+  const row = modelRow(LIVE_DEEPSEEK, BASE_DEEPSEEK, {
+    subscription: true,
+    api: { id: LIVE_DEEPSEEK.id, url: "x", npm: "n" },
+    dev: DEV_DEEPSEEK,
+  })
+  // models.dev's name, levels and price, not the live catalogue's.
+  assert.equal(row.name, "DeepSeek V4.1 Flash")
+  assert.deepEqual(Object.keys(row.variants), ["low", "high", "max"])
+  assert.equal(row.reasoning, true)
+  assert.equal(row.capabilities.toolcall, true)
+  assert.equal(row.capabilities.attachment, true)
+  // input kinds are models.dev's (no live "file"), with text kept
+  assert.deepEqual(row.capabilities.input, { text: true, image: true, audio: false, video: false, pdf: false })
+  // a plan draws Flows: no dollars
+  assert.equal(row.cost, undefined)
+  assert.equal(row.release_date, "2026-09-10")
+})
+
+test("modelRow takes models.dev's limits and price over the live catalogue", () => {
+  const row = modelRow(LIVE_KIMI, BASE_KIMI, {
+    subscription: false,
+    api: { id: LIVE_KIMI.id, url: "x", npm: "n" },
+    dev: DEV_KIMI,
+  })
+  assert.equal(row.name, "Kimi K3") // not "MoonshotAI: Kimi K3"
+  assert.deepEqual(row.variants, { max: {} }) // models.dev's only level
+  assert.equal(row.limit.output, 131072) // models.dev's, not the live 262144
+  assert.equal(row.limit.context, 1048576)
+  assert.equal(row.capabilities.temperature, false) // models.dev says it takes none
+  assert.deepEqual(row.cost, { input: 3, output: 15, cache: { read: 0.3, write: 0 } })
+  assert.deepEqual(row.modalities.input, ["text", "image", "video"])
+})
+
+test("modelRow gives no levels where models.dev names none", () => {
+  const live = {
+    id: "x/toggle-only",
+    display_name: "Toggle Live",
+    input_modalities: ["text"],
+    output_modalities: ["text"],
+    capabilities: { reasoning: true },
+    context_length: 64000,
+    max_tokens: 2048,
+  }
+  const row = modelRow(live, {}, { subscription: true, dev: DEV_TOGGLE })
+  assert.equal(row.reasoning, true)
+  assert.equal(row.variants, undefined) // a toggle has no levels to pick
+  assert.equal(row.name, "Toggle Only")
+  assert.equal(row.limit.context, 128000) // models.dev's, since the live said 64000
+  assert.equal(row.limit.output, 8192)
+})
+
+test("modelRow keeps the config's own variants over models.dev's", () => {
+  const row = modelRow(LIVE_KIMI, { ...BASE_KIMI, variants: { low: {} } }, {
+    subscription: true,
+    dev: DEV_KIMI,
+  })
+  assert.deepEqual(row.variants, { low: {} })
+})
+
+test("modelsDevCachePaths follows Go's user cache dir per platform", () => {
+  assert.deepEqual(modelsDevCachePaths({ XDG_CACHE_HOME: "/x/cache" }, "linux", "/home/u"), [
+    "/x/cache/magpie/models.json",
+    "/home/u/.cache/magpie/models.json",
+  ])
+  assert.deepEqual(modelsDevCachePaths({}, "linux", "/home/u"), ["/home/u/.cache/magpie/models.json"])
+  assert.deepEqual(modelsDevCachePaths({}, "darwin", "/Users/u"), ["/Users/u/Library/Caches/magpie/models.json"])
+  assert.deepEqual(
+    modelsDevCachePaths({ LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local" }, "win32", "C:\\Users\\u"),
+    ["C:/Users/u/AppData/Local/magpie/models.json"],
+  )
+  assert.deepEqual(modelsDevCachePaths({}, "win32", "C:\\Users\\u"), ["C:/Users/u/AppData/Local/magpie/models.json"])
+})
+
+test("modelsDevModels reads magpie's models.dev snapshot", async () => {
+  const { modelsDevModels } = _internal
+  const root = await mkdtemp(join(tmpdir(), "magpie-models-dev-"))
+  // Hide the real ~/.cache/magpie/models.json this machine may have.
+  const savedHome = process.env.HOME
+  process.env.HOME = join(root, "home")
+  try {
+    const cache = join(root, "cache")
+    await mkdir(join(cache, "magpie"), { recursive: true })
+    await writeFile(
+      join(cache, "magpie", "models.json"),
+      JSON.stringify({
+        deepseek: { id: "deepseek", models: {} },
+        zenmux: { id: "zenmux", models: { [DEV_DEEPSEEK.id]: DEV_DEEPSEEK } },
+      }),
+    )
+    const models = modelsDevModels({ XDG_CACHE_HOME: cache })
+    assert.equal(models[DEV_DEEPSEEK.id].name, "DeepSeek V4.1 Flash")
+    assert.deepEqual(models[DEV_DEEPSEEK.id].reasoning_options[1].values, ["low", "high", "max"])
+
+    // no snapshot and a broken snapshot both read as none, not an error
+    assert.deepEqual(modelsDevModels({ XDG_CACHE_HOME: join(root, "empty") }), {})
+    const broken = join(root, "broken")
+    await mkdir(join(broken, "magpie"), { recursive: true })
+    await writeFile(join(broken, "magpie", "models.json"), "{ not json")
+    assert.deepEqual(modelsDevModels({ XDG_CACHE_HOME: broken }), {})
+  } finally {
+    if (savedHome === undefined) delete process.env.HOME
+    else process.env.HOME = savedHome
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("models hook aligns every row with models.dev", async () => {
+  const root = await mkdtemp(join(tmpdir(), "magpie-models-hook-"))
+  const cache = join(root, "cache")
+  await mkdir(join(cache, "magpie"), { recursive: true })
+  await writeFile(
+    join(cache, "magpie", "models.json"),
+    JSON.stringify({ zenmux: { id: "zenmux", models: { [DEV_DEEPSEEK.id]: DEV_DEEPSEEK } } }),
+  )
+  const liveOnly = {
+    id: "new/model",
+    display_name: "New Model",
+    input_modalities: ["text"],
+    output_modalities: ["text"],
+    capabilities: { reasoning: true },
+    context_length: 200000,
+    max_tokens: 8192,
+  }
+  const saved = { HOME: process.env.HOME, XDG_CACHE_HOME: process.env.XDG_CACHE_HOME }
+  process.env.HOME = join(root, "home")
+  process.env.XDG_CACHE_HOME = cache
+  const restore = stubFetch(() => ({ status: 200, text: JSON.stringify({ data: [LIVE_DEEPSEEK, liveOnly] }) }))
+  try {
+    const plugin = await ZenMuxBuilderAuthPlugin({}, {})
+    const rows = await plugin.provider.models(
+      { models: { [BASE_DEEPSEEK.id]: BASE_DEEPSEEK } },
+      { auth: { key: "sk-subs-x" } },
+    )
+    const known = rows[LIVE_DEEPSEEK.id]
+    assert.ok(known)
+    assert.deepEqual(Object.keys(known.variants), ["low", "high", "max"])
+    assert.equal(known.name, "DeepSeek V4.1 Flash")
+    assert.equal(known.limit.output, 384000)
+
+    // a model models.dev does not know keeps the live entry and our levels
+    const unknown = rows["new/model"]
+    assert.ok(unknown)
+    assert.equal(unknown.name, "New Model")
+    assert.deepEqual(Object.keys(unknown.variants), ["low", "medium", "high"])
+  } finally {
+    restore()
+    if (saved.HOME === undefined) delete process.env.HOME
+    else process.env.HOME = saved.HOME
+    if (saved.XDG_CACHE_HOME === undefined) delete process.env.XDG_CACHE_HOME
+    else process.env.XDG_CACHE_HOME = saved.XDG_CACHE_HOME
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("config hook declares the provider but leaves the models to models.dev", async () => {
+  const plugin = await ZenMuxBuilderAuthPlugin({}, {})
+  const cfg = { provider: {} }
+  await plugin.config(cfg)
+  assert.deepEqual(cfg.provider.zenmux, {
+    name: "ZenMux",
+    npm: "@ai-sdk/openai-compatible",
+    api: "https://zenmux.ai/api/v1",
+  })
+
+  // a provider entry the user already has is left alone, models and all
+  const own = { provider: { zenmux: { api: "https://example.test/v1", models: { "own/model": { name: "Own" } } } } }
+  await plugin.config(own)
+  assert.deepEqual(own.provider.zenmux, { api: "https://example.test/v1", models: { "own/model": { name: "Own" } } })
+})
+
+test("modelRow never says an image model gives text", () => {
+  const dev = {
+    id: "x/image",
+    name: "Image",
+    reasoning: false,
+    tool_call: false,
+    modalities: { input: ["text"], output: ["image"] },
+    limit: { context: 10240, output: 0 },
+  }
+  const live = {
+    id: "x/image",
+    display_name: "Image",
+    input_modalities: ["text"],
+    output_modalities: ["image"],
+    context_length: 10240,
+  }
+  const row = modelRow(live, {}, { dev })
+  assert.deepEqual(row.capabilities.output, { text: false, image: true, audio: false, video: false, pdf: false })
+  assert.deepEqual(row.modalities.output, ["image"])
+  assert.deepEqual(row.capabilities.input, { text: true, image: false, audio: false, video: false, pdf: false })
+
+  // a live-only model the same way: no text output invented
+  const only = modelRow({ ...live }, {}, {})
+  assert.equal(only.capabilities.output.text, undefined)
+  assert.deepEqual(only.modalities.output, ["image"])
 })
