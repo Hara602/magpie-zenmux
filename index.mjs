@@ -88,26 +88,46 @@ function messageOf(text) {
 // subscription key too (it wants a Management API key). So a subscription key
 // is proved the only way ZenMux lets us: a one-token chat request, which is
 // exactly the thing the key is for.
-const PROBE_RE = /(^|[/_.-])(flash|lite|mini|haiku|small|turbo|air)([/_.-]|$)/i
+// Mainstream ids first: a probe wants a model that is certainly served and
+// certainly healthy, not merely one whose name looks cheap.
+const PREFERRED_PROBE = [
+  "deepseek/deepseek-v4.1-flash",
+  "deepseek/deepseek-v4-flash",
+  "google/gemini-4-hydrogen",
+  "openai/gpt-6.1-terra",
+  "anthropic/claude-fable-5.2",
+  "moonshotai/kimi-k3",
+]
+const CHEAP_RE = /(^|[/_.-])(flash|lite|mini|haiku|small|turbo)([/_.-]|$)/i
+const DEAR_RE = /(pro|max|opus|ultra|thinking)/i
 
-// probeModel picks the cheapest-looking chat model, preferring one the plan
-// actually serves when a plan list is at hand.
-function probeModel(models, served) {
-  const chat = models.filter((m) => isChatModel(m))
-  const pool = served ? chat.filter((m) => served.has(m.id)) : chat
-  const use = pool.length ? pool : chat
-  const scored = use
-    .map((m) => {
-      const id = m.id
-      let score = 5
-      if (PROBE_RE.test(id)) score = 1
-      else if (/(pro|max|opus|ultra|thinking)/i.test(id)) score = 9
-      else if (/(flash|lite|mini|haiku)/i.test(id)) score = 2
-      const context = Number(m.context_length) || 0
-      return { id, score, context }
-    })
+// probeCandidates lists the models a probe should try, best first: the
+// mainstream ones that this catalogue has (and this plan serves, when known),
+// then the cheapest-looking chat models. A plan that serves none of them is
+// unusual, so the list is short.
+function probeCandidates(models, served, limit = 6) {
+  const chat = (models ?? []).filter((m) => isChatModel(m))
+  const allowed = (id) => !served || served.has(id)
+  const out = []
+  const add = (id) => {
+    if (id && !out.includes(id) && allowed(id)) out.push(id)
+  }
+  const present = new Set(chat.map((m) => m.id))
+  for (const id of PREFERRED_PROBE) if (present.has(id)) add(id)
+
+  const cheap = chat
+    .filter((m) => !out.includes(m.id))
+    .map((m) => ({
+      id: m.id,
+      score: CHEAP_RE.test(m.id) ? 1 : DEAR_RE.test(m.id) ? 9 : 5,
+      context: Number(m.context_length) || 0,
+    }))
     .sort((a, b) => a.score - b.score || a.context - b.context)
-  return scored.length ? scored[0].id : ""
+  for (const m of cheap) {
+    if (out.length >= limit) break
+    add(m.id)
+  }
+  return out.slice(0, limit)
 }
 
 // chatProbe makes one minimal request. A 200 proves the key; 429/402 say the
@@ -136,7 +156,17 @@ async function chatProbe(key, model, { signal } = {}) {
 
 // validateSubscriptionKey proves a subscription key is live without failing on
 // the endpoints that answer 403 to it by design.
-async function validateSubscriptionKey(key, { signal, served, models } = {}) {
+//
+// ZenMux's answers on a chat request mean different things:
+//   200            the key works
+//   429 / 402      the key works, the allowance is spent
+//   400/404/422    the key was accepted and the model or payload was the problem
+//   403            the key (or its permission) was refused — or, when the text
+//                  names a model, that model is outside this plan
+//   401            no key
+// So a 4xx that is not 401/403 proves the sign-in is good, even when no model
+// answers 200.
+async function validateSubscriptionKey(key, { signal, served, models, probeModel } = {}) {
   // Fast path: an unknown generation id is 404 and a wrong key 403, but never
   // trust a 403 here — that is also what a good subscription key gets.
   try {
@@ -145,7 +175,6 @@ async function validateSubscriptionKey(key, { signal, served, models } = {}) {
       headers: { authorization: `Bearer ${key}`, accept: "application/json" },
       ...(signal ? { signal } : {}),
     })
-    const text = await res.text().catch(() => "")
     await res.body?.cancel().catch(() => {})
     if (res.status === 200 || res.status === 404 || res.status === 400) {
       return { ok: true, via: "metering" }
@@ -168,84 +197,31 @@ async function validateSubscriptionKey(key, { signal, served, models } = {}) {
     }
   }
 
-  const tried = new Set()
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const model = probeModel(catalogue ?? [], served)
-    const pick = (catalogue ?? []).find((m) => m.id === model && !tried.has(m.id))?.id
-    const target = pick || (catalogue ?? []).map((m) => m.id).find((id) => !tried.has(id))
-    if (!target) break
-    tried.add(target)
+  const forced = typeof probeModel === "string" && probeModel.trim() ? probeModel.trim() : ""
+  const candidates = forced ? [forced] : probeCandidates(catalogue, served)
 
-    const res = await chatProbe(key, target, { signal })
-    if (res.status === 200) return { ok: true, via: "chat", model: target }
-    if (res.status === 429 || res.status === 402) return { ok: true, via: "chat-throttled", model: target }
+  let accepted = null
+  let last = null
+  for (const model of candidates) {
+    const res = await chatProbe(key, model, { signal })
+    last = res
+    if (res.status === 200) return { ok: true, via: "chat", model }
+    if (res.status === 429 || res.status === 402) return { ok: true, via: "chat-throttled", model }
     if (res.status === 401) return { ok: false, status: 401, message: res.message }
-    if (res.status === 403 && /model/i.test(res.message)) continue // not in this plan; try another
-    return { ok: false, status: res.status, message: res.message }
+    if (res.status === 403) {
+      // "no model in this plan" is worth another model; a refused key is not.
+      if (/model/i.test(res.message)) continue
+      return { ok: false, status: 403, message: res.message }
+    }
+    // 400 / 404 / 422: the key got through, the model or the body did not.
+    accepted = { model, status: res.status, message: res.message }
   }
-  return { ok: false, status: 403, message: "ZenMux refused every model this account tried" }
-}
 
-async function fetchSubscription(managementKey, { signal } = {}) {
-  const res = await fetch(`${MANAGEMENT_API}/subscription/detail`, {
-    method: "GET",
-    headers: { authorization: `Bearer ${managementKey}`, accept: "application/json" },
-    ...(signal ? { signal } : {}),
-  })
-  const text = await res.text().catch(() => "")
-  let body
-  try {
-    body = text ? JSON.parse(text) : undefined
-  } catch {
-    body = undefined
-  }
-  await res.body?.cancel().catch(() => {})
-  return { status: res.status, ok: res.ok, body, text }
-}
-
-// Plans change rarely; one host asks once every six hours.
-let planCache = { at: 0, sets: null }
-const PLAN_TTL = 6 * 3600_000
-
-// fetchPlanSets reads the public plan catalogue: which models each planKey
-// (free / starter / pro / max / ultra) serves. It needs no key, so it also
-// lets chat-only users curate by `plan` without a Management API key.
-async function fetchPlanSets({ signal } = {}) {
-  const now = Date.now()
-  if (planCache.sets && now - planCache.at < PLAN_TTL) return planCache.sets
-  const res = await fetch(`${PUBLIC_API}/subscription/public/get_all_plans`, {
-    method: "GET",
-    headers: { accept: "application/json" },
-    ...(signal ? { signal } : {}),
-  })
-  const text = await res.text().catch(() => "")
-  await res.body?.cancel().catch(() => {})
-  if (!res.ok) throw new Error(`ZenMux answered HTTP ${res.status}`)
-  let body
-  try {
-    body = text ? JSON.parse(text) : undefined
-  } catch {
-    throw new Error("ZenMux sent a plan catalogue magpie couldn't read")
-  }
-  const sets = planModelSets(body?.data)
-  if (sets.size) planCache = { at: now, sets }
-  return sets
-}
-
-// planKeyFor says which plan this account is on: an explicit `plan` option
-// wins, else the Management API key's subscription detail.
-async function planKeyFor(auth, options, { signal } = {}) {
-  const forced = typeof options?.plan === "string" ? options.plan.trim().toLowerCase() : ""
-  if (forced) return forced
-  const managementKey = managementKeyOf(auth)
-  if (!managementKey) return ""
-  try {
-    const { status, body } = await fetchSubscription(managementKey, { signal })
-    if (status !== 200 || !isObj(body) || body.success === false) return ""
-    const tier = isObj(body.data?.plan) && typeof body.data.plan.tier === "string" ? body.data.plan.tier : ""
-    return tier.trim().toLowerCase()
-  } catch {
-    return ""
+  if (accepted) return { ok: true, via: "probe-inconclusive", ...accepted }
+  return {
+    ok: false,
+    status: last?.status ?? 403,
+    message: last?.message || "ZenMux refused every model this account tried",
   }
 }
 
@@ -314,6 +290,7 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
   const include = entries(options?.models ?? options?.include)
   const exclude = entries(options?.exclude ?? options?.notModels)
   const allModels = options?.allModels === true || options?.allModels === "true"
+  const probeModelOption = typeof options?.probeModel === "string" ? options.probeModel.trim() : ""
 
   return {
     // The provider and its default models, before anyone signs in. models.dev
@@ -382,7 +359,10 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
             // The subscription key. Only a real (one-token) request proves it:
             // the model lists are public and the management endpoints answer
             // 403 to a good subscription key as well.
-            const verdict = await validateSubscriptionKey(key, { signal })
+            const verdict = await validateSubscriptionKey(key, {
+              signal,
+              probeModel: probeModelOption,
+            })
             if (!verdict.ok) {
               const legacy = LEGACY_KEY_RE.test(key)
                 ? " — this key's sk-ss-v1- / sk-mg-v1- prefix was retired on 2026-11-10: create a new key"
@@ -568,7 +548,7 @@ export const _internal = {
   annotate,
   isKeyRefusal,
   validateSubscriptionKey,
-  probeModel,
+  probeCandidates,
   chatProbe,
   messageOf,
   subscriptionToUsage,

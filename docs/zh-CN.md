@@ -109,8 +109,13 @@ resource”，所以**不能只看状态码**。按可能性排序：
 顺带说明：模型列表接口（`/api/v1/models`、`/api/anthropic/v1/models`、
 `/api/vertex-ai/v1beta/models`）对**任何** Key 都回 200，验证不了 Key；而所有
 `/api/v1/management/*` 对**合法订阅 Key** 也回 403（它要 Management Key）。所以 v0.1.1 起，
-登录改为发一个 `max_tokens: 1` 的真实请求来验证（消耗几个 token，可忽略；`429/402`
-也算 Key 有效，因为那说明 Key 能用、只是额度用完了）。
+登录改为发一个 `max_tokens: 1` 的真实请求来验证（消耗几个 token，可忽略）。
+
+v0.1.2 又修了一处：探测用的模型如果恰好上游报错（例如某些新模型回
+`404 Server encountered an unexpected error`），旧版会把它当成 Key 无效。现在会依次换几个
+主流模型再试，并且把这些响应都算「Key 已通过」：`200`、`429/402`（额度用尽）、
+`400/404/422`（鉴权过了，是模型或请求体的问题）。只有 `401`、或文案里**不提模型**的 `403`
+才算拒绝。想固定探测模型可以设 `options.probeModel`。
 
 ## 已经踩平/需要知道的坑
 

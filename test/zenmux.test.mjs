@@ -186,20 +186,130 @@ test("entries accepts arrays, strings and objects", () => {
   assert.deepEqual(entries(null), [])
 })
 
-test("probeModel picks a cheap chat model, and one the plan serves", () => {
-  const { probeModel } = _internal
+test("probeCandidates prefers mainstream models, then cheap ones", () => {
+  const { probeCandidates } = _internal
   const models = [
     { id: "openai/gpt-6.1-terra", context_length: 1050000, output_modalities: ["text"] },
     { id: "anthropic/claude-fable-5.2", context_length: 200000, output_modalities: ["text"] },
-    { id: "deepseek/deepseek-v4-flash", context_length: 1000000, output_modalities: ["text"] },
+    { id: "deepseek/deepseek-v4.1-flash", context_length: 1000000, output_modalities: ["text"] },
     { id: "openai/gpt-image-2.6-flare", context_length: 32000, output_modalities: ["image"] },
   ]
-  assert.equal(probeModel(models), "deepseek/deepseek-v4-flash")
+  const list = probeCandidates(models)
+  assert.equal(list[0], "deepseek/deepseek-v4.1-flash") // the first preferred one present
+  assert.ok(!list.includes("openai/gpt-image-2.6-flare")) // never a non-chat model
 
-  // A plan that only serves the big Anthropic model: the probe follows the plan.
+  // A plan that serves only the Anthropic model: nothing else is worth trying.
   const served = new Set(["anthropic/claude-fable-5.2"])
-  assert.equal(probeModel(models, served), "anthropic/claude-fable-5.2")
-  assert.equal(probeModel([], served), "")
+  assert.deepEqual(probeCandidates(models, served), ["anthropic/claude-fable-5.2"])
+  assert.deepEqual(probeCandidates([], served), [])
+})
+
+// validateSubscriptionKey against a stubbed ZenMux, so every status is covered.
+function stubFetch(handler) {
+  const original = globalThis.fetch
+  globalThis.fetch = async (url, init) => {
+    const body = await handler(String(url), init)
+    return new Response(body.text ?? "", { status: body.status, headers: { "content-type": "application/json" } })
+  }
+  return () => {
+    globalThis.fetch = original
+  }
+}
+
+const MODELS = [{ id: "deepseek/deepseek-v4.1-flash", context_length: 1000000, output_modalities: ["text"] }]
+const mgmt403 = { status: 403, text: '{"success":false,"message":"Invalid API key"}' }
+
+test("validateSubscriptionKey: a 200 chat request proves the key", async () => {
+  const { validateSubscriptionKey } = _internal
+  const restore = stubFetch((url) => {
+    if (url.includes("/management/generation")) return mgmt403
+    return { status: 200, text: "{}" }
+  })
+  try {
+    const v = await validateSubscriptionKey("sk-subs-x", { models: MODELS })
+    assert.equal(v.ok, true)
+    assert.equal(v.via, "chat")
+  } finally {
+    restore()
+  }
+})
+
+test("validateSubscriptionKey: the management metering 404 is a fast yes", async () => {
+  const { validateSubscriptionKey } = _internal
+  const restore = stubFetch(() => ({ status: 404, text: "{}" }))
+  try {
+    const v = await validateSubscriptionKey("sk-subs-x", { models: MODELS })
+    assert.deepEqual([v.ok, v.via], [true, "metering"])
+  } finally {
+    restore()
+  }
+})
+
+test("validateSubscriptionKey: a 403 about the key is a no", async () => {
+  const { validateSubscriptionKey } = _internal
+  const restore = stubFetch(() => ({
+    status: 403,
+    text: '{"error":{"code":"403","type":"access_denied","message":"You have no permission to access this resource (api_key_source: subscription)"}}',
+  }))
+  try {
+    const v = await validateSubscriptionKey("sk-subs-x", { models: MODELS })
+    assert.equal(v.ok, false)
+    assert.equal(v.status, 403)
+    assert.match(v.message, /no permission/)
+  } finally {
+    restore()
+  }
+})
+
+test("validateSubscriptionKey: 404 on every model still means the key got through", async () => {
+  const { validateSubscriptionKey } = _internal
+  const restore = stubFetch((url) => {
+    if (url.includes("/management/generation")) return mgmt403
+    return { status: 404, text: '{"error":{"message":"Server encountered an unexpected error."}}' }
+  })
+  try {
+    const v = await validateSubscriptionKey("sk-subs-x", { models: MODELS })
+    assert.equal(v.ok, true)
+    assert.equal(v.via, "probe-inconclusive")
+  } finally {
+    restore()
+  }
+})
+
+test("validateSubscriptionKey: a spent allowance (429) is still a good key", async () => {
+  const { validateSubscriptionKey } = _internal
+  const restore = stubFetch((url) => {
+    if (url.includes("/management/generation")) return mgmt403
+    return { status: 429, text: '{"error":{"message":"rate limited"}}' }
+  })
+  try {
+    const v = await validateSubscriptionKey("sk-subs-x", { models: MODELS })
+    assert.deepEqual([v.ok, v.via], [true, "chat-throttled"])
+  } finally {
+    restore()
+  }
+})
+
+test("validateSubscriptionKey: a 403 naming a model tries the next one", async () => {
+  const { validateSubscriptionKey } = _internal
+  let calls = 0
+  const restore = stubFetch((url) => {
+    if (url.includes("/management/generation")) return mgmt403
+    calls++
+    if (calls === 1) return { status: 403, text: '{"error":{"message":"model not available in your plan"}}' }
+    return { status: 200, text: "{}" }
+  })
+  try {
+    const v = await validateSubscriptionKey("sk-subs-x", {
+      models: [
+        { id: "deepseek/deepseek-v4.1-flash", context_length: 1000000, output_modalities: ["text"] },
+        { id: "openai/gpt-6.1-terra", context_length: 1000000, output_modalities: ["text"] },
+      ],
+    })
+    assert.deepEqual([v.ok, v.via], [true, "chat"])
+  } finally {
+    restore()
+  }
 })
 
 test("isKeyRefusal marks a dead key but not a model outside the plan", () => {

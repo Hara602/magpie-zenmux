@@ -100,9 +100,11 @@ from the provider's row.
   `/api/anthropic/v1/models`, `/api/vertex-ai/v1beta/models`) answer `200` to *any* key, so
   they cannot test one; and every `/api/v1/management/*` endpoint answers `403` to a valid
   subscription key, because it wants a Management API key. So sign-in proves the
-  subscription key with one minimal real request (`max_tokens: 1`). It costs a few tokens
-  of one Flow; a `429`/`402` still counts as a good key, because it means the key works
-  and the window is spent.
+  subscription key with one minimal real request (`max_tokens: 1`), trying a few
+  mainstream models in turn. It costs a few tokens of one Flow, and these answers all
+  count as a working key: `200`, `429`/`402` (the allowance is spent) and `400`/`404`/`422`
+  (the key got through; the model or body was the problem). Only `401`, or a `403` whose
+  text does not name a model, is a refusal. `options.probeModel` pins the model tried.
 - **No check-in** — ZenMux has no daily check-in, so the plugin implements no
   `auth.checkin`. It never writes files, never runs the vendor's CLI and sends
   requests only to `zenmux.ai` (or an override you set).

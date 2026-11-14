@@ -111,6 +111,8 @@ class Handler(BaseHTTPRequestHandler):
                            "message": "You have no permission to access this resource (api_key_source: subscription)"}},
             )
         model = body.get("model") or "deepseek/deepseek-v4.1-flash"
+        if os.environ.get("MOCK_404") == "1":
+            return self._json(404, {"error": {"code": "404", "message": "Server encountered an unexpected error."}})
         if body.get("stream"):
             return self._sse(
                 [
