@@ -124,6 +124,23 @@ likelihood:
 
 `sk-payg-…` (pay-as-you-go) keys work too — they spend credits instead of Flows.
 
+## Why the picker shows fewer models than zenmux.ai
+
+zenmux.ai lists **219** models; the site's own count of "200+" comes from
+`/api/frontend/model/available/list`, which returns one row per *endpoint* (253 rows for
+those 219 models). magpie has to show models an agent can actually call, so:
+
+| Step | Count | Why |
+| --- | --- | --- |
+| ZenMux catalogue (`/api/v1/models`) | 219 | everything ZenMux serves |
+| → chat models only | **170** | drops 49 that output images (14), video (14), speech (6), transcriptions (6), embeddings (4), decisions (3) and reranks (2) — an agent's model picker can only chat |
+| → your plan's models | **169** | 1 chat model (`inclusionai/ring-2.6-1t`) is in no Builder Plan; the rest are filtered per tier |
+| before signing in | 102 | magpie's bundled models.dev entry for `zenmux`, which is smaller than ZenMux's live list |
+
+Non-chat models are hidden on purpose: picking a video model in a chat agent fails on the
+first request. `options.includeNonChat` lists everything the plan serves instead (for
+providers used through `/v1/images/generations` and the like).
+
 ## Options
 
 `plugins.json` options, e.g. `magpie plugin options zenmux '{"plan":"pro"}'` when the
@@ -134,7 +151,8 @@ plugin is added through the app; a folder entry can also carry `"options"`:
     "plan": "pro",                 // force a plan without a Management API key
     "models": ["openai/", "*/kimi-*"],  // only these (exact id, vendor/ prefix or glob)
     "exclude": ["deepseek/deepseek-v4-flash"],
-    "allModels": true              // list every chat model, ignore the plan filter
+    "allModels": true,             // list every chat model, ignore the plan filter
+    "includeNonChat": true,         // also list image / video / audio / embedding models
 } }
 ```
 

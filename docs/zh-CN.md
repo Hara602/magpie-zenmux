@@ -93,6 +93,22 @@ App 里的操作路径：**Plugins → Add a plugin** 指向文件夹 → 在 pr
 额度出现在 Providers 卡片和 `magpie quota`。agent 里模型名是 `zenmux/<vendor>/<model>`，
 例如 `zenmux/deepseek/deepseek-v4.1-flash`、`zenmux/openai/gpt-6.1-terra`。
 
+## 为什么比 zenmux.ai 上少
+
+zenmux.ai 上显示 **219** 个模型；站内"200+"的列表来自
+`/api/frontend/model/available/list`，它按 **endpoint** 一条一条返回（219 个模型对应 253 条）。
+magpie 里要放的是 agent 真能调用的模型，所以会逐层收窄：
+
+| 步骤 | 数量 | 原因 |
+| --- | --- | --- |
+| ZenMux 目录（`/api/v1/models`） | 219 | ZenMux 提供的全部 |
+| → 只留聊天模型 | **170** | 去掉 49 个：输出图片 14、视频 14、语音 6、语音转写 6、向量 4、决策 3、rerank 2 —— agent 的模型选择器只能聊天 |
+| → 你套餐包含的 | **169** | 只有 1 个聊天模型（`inclusionai/ring-2.6-1t`）不在任何 Builder Plan 里，其余按档位过滤 |
+| 未登录时 | 102 | magpie 内置的 models.dev `zenmux` 条目，比 ZenMux 实时列表小 |
+
+非聊天模型是**故意**不列的：在聊天 agent 里选了视频模型，第一个请求就会失败。
+想全部列出来（例如给走 `/v1/images/generations` 的用法），设 `options.includeNonChat: true`。
+
 ## 登录报 403 时看这里
 
 ZenMux 对多种情况都回同一句 `403 access_denied` / “You have no permission to access this

@@ -101,6 +101,15 @@ const PREFERRED_PROBE = [
 const CHEAP_RE = /(^|[/_.-])(flash|lite|mini|haiku|small|turbo)([/_.-]|$)/i
 const DEAR_RE = /(pro|max|opus|ultra|thinking)/i
 
+// isListableNonChat says which non-chat model is still a real model (not an
+// endpoint we cannot address): an image, video, speech, transcription,
+// embedding, rerank or decision model with a proper slug.
+function isListableNonChat(m) {
+  if (!isObj(m) || typeof m.id !== "string" || !m.id) return false
+  if (!/^[\w.-]+\/[\w.:-]+$/.test(m.id)) return false
+  return Array.isArray(m.output_modalities) && m.output_modalities.length > 0
+}
+
 // probeCandidates lists the models a probe should try, best first: the
 // mainstream ones that this catalogue has (and this plan serves, when known),
 // then the cheapest-looking chat models. A plan that serves none of them is
@@ -291,6 +300,9 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
   const exclude = entries(options?.exclude ?? options?.notModels)
   const allModels = options?.allModels === true || options?.allModels === "true"
   const probeModelOption = typeof options?.probeModel === "string" ? options.probeModel.trim() : ""
+  // Off by default: an agent picks chat models, so a video or embedding model in
+  // the picker is a trap. Turn it on to see everything the plan serves.
+  const includeNonChat = options?.includeNonChat === true || options?.includeNonChat === "true"
 
   return {
     // The provider and its default models, before anyone signs in. models.dev
@@ -514,7 +526,8 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
         const build = (filter) => {
           const out = {}
           for (const m of live) {
-            if (!isChatModel(m)) continue
+            if (!isChatModel(m) && !includeNonChat) continue
+            if (!isChatModel(m) && !isListableNonChat(m)) continue
             if (filter && !filter.has(m.id)) continue
             if (include.length && !include.some((p) => matches(m.id, p))) continue
             if (exclude.length && exclude.some((p) => matches(m.id, p))) continue
@@ -549,6 +562,7 @@ export const _internal = {
   isKeyRefusal,
   validateSubscriptionKey,
   probeCandidates,
+  isListableNonChat,
   chatProbe,
   messageOf,
   subscriptionToUsage,

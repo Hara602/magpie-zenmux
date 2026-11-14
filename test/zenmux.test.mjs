@@ -122,6 +122,16 @@ test("isChatModel keeps chat models and drops image, video and audio ones", () =
   assert.equal(isChatModel(undefined), false)
 })
 
+test("isListableNonChat accepts images and videos, rejects junk", () => {
+  const { isListableNonChat } = _internal
+  assert.equal(isListableNonChat({ id: "openai/gpt-image-2.6-flare", output_modalities: ["image"] }), true)
+  assert.equal(isListableNonChat({ id: "alibaba/wan3.0-video", output_modalities: ["video"] }), true)
+  assert.equal(isListableNonChat({ id: "qwen/text-embedding-4", output_modalities: ["embeddings"] }), true)
+  assert.equal(isListableNonChat({ id: "broken", output_modalities: ["image"] }), false)
+  assert.equal(isListableNonChat({ id: "x/y", output_modalities: [] }), false)
+  assert.equal(isListableNonChat(null), false)
+})
+
 test("costOf reads ZenMux's pricings into magpie's per-million cost", () => {
   const c = costOf({
     pricings: {
