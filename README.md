@@ -196,6 +196,31 @@ those 219 models). magpie has to show models an agent can actually call, so:
 Non-chat models are listed by default so the plan is fully visible; a *chat* request to one
 of them fails at ZenMux. `includeNonChat: false` hides them.
 
+### Why a model is asked on the protocol it is (and not another)
+
+ZenMux lists a model on several endpoints, and the endpoints do *not* all accept a
+reasoning control. `deepseek/deepseek-v4.1-flash`, for example, has a Messages and a
+Responses endpoint that carry no `thinking` / `reasoning` parameter at all; only its
+`chat.completions` adapter accepts `reasoning_effort` and `thinking`. Routing it to
+Messages, as an earlier version did, threw the level away before the request even left
+magpie — that was the "max becomes high" bug.
+
+So the plugin now picks the protocol in this order:
+
+| Order | Protocol | Why |
+| --- | --- | --- |
+| 1 | Responses | magpie forwards `reasoning.effort` unchanged (`xhigh` works) |
+| 2 | chat completions | magpie forwards `reasoning_effort` as it came |
+| 3 | Messages | every request becomes `thinking:{type:"adaptive"}`; the level is lost, so it is a last resort |
+
+and, for a model that reasons, only among the endpoints whose adapter actually accepts a
+reasoning parameter (`reasoning_effort`, `reasoning`, `thinking`, `enable_thinking`,
+`thinking_budget`). A model whose endpoints accept none falls back to the catalogue order.
+
+The highest level of each protocol also carries an explicit
+`thinking: {type:"enabled", budget_tokens:N}`, because ZenMux's chat adapters accept a
+budget and the vendor otherwise infers one from `max_completion_tokens`.
+
 ## Reasoning levels (why "max" used to become "high")
 
 magpie only translates the effort names `low` / `medium` / `high` for ZenMux's

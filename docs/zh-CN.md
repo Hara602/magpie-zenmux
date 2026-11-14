@@ -182,6 +182,28 @@ magpie 里要放的是 agent 真能调用的模型，所以会逐层收窄：
 非聊天模型是**故意**不列的：在聊天 agent 里选了视频模型，第一个请求就会失败。
 想全部列出来（例如给走 `/v1/images/generations` 的用法），设 `options.includeNonChat: true`。
 
+### 为什么这个模型走的是某个协议（而不是别的）
+
+ZenMux 一个模型会挂在多个 endpoint 上，但**这些 endpoint 并不都接受推理参数**。以
+`deepseek/deepseek-v4.1-flash` 为例：它的 Messages 和 Responses endpoint 完全没有
+`thinking` / `reasoning` 参数，只有 `chat.completions` 适配器接受 `reasoning_effort` 和
+`thinking`。上一版把它路由到 Messages，档位在离开 magpie 之前就被丢掉了——这就是「max 变
+high」的根因。
+
+所以现在按这个顺序选协议：
+
+| 顺序 | 协议 | 原因 |
+| --- | --- | --- |
+| 1 | Responses | magpie 原样转发 `reasoning.effort`（`xhigh` 可用） |
+| 2 | chat completions | magpie 原样转发 `reasoning_effort` |
+| 3 | Messages | 每个请求都被改成 `thinking:{type:"adaptive"}`，档位丢失，只作兜底 |
+
+且对于会推理的模型，只在**适配器真的接受推理参数**的 endpoint 之间选（`reasoning_effort`、
+`reasoning`、`thinking`、`enable_thinking`、`thinking_budget`）。都不接受时才退回目录顺序。
+
+每个协议的最高档还会附带显式的 `thinking: {type:"enabled", budget_tokens:N}`，
+因为 ZenMux 的 chat 适配器接受预算，否则它会用 `max_completion_tokens` 自己反推。
+
 ## 推理档位（为什么选 max 会变成 high）
 
 magpie 对 ZenMux 的协议只翻译 `low` / `medium` / `high` 这三个档位名。客户端发别的东西

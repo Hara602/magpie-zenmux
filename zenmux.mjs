@@ -103,14 +103,33 @@ export function variantsForProtocol(protocol, levels) {
   const wanted = Array.isArray(levels) && levels.length ? levels : allowed
   // A level the vendor cannot express is dropped rather than offered and
   // silently degraded; a client's top level becomes the vendor's top.
-  const names = wanted.map((level) => {
-    const l = String(level).trim().toLowerCase()
-    return CLIENT_TOPS.includes(l) ? top : l
-  })
   const out = {}
-  for (const name of names) {
-    if (!allowed.includes(name)) continue
-    out[name] = { reasoningEffort: name }
+  const seen = new Set()
+  for (const level of wanted) {
+    const l = String(level).trim().toLowerCase()
+    const name = l
+    // A client's top level keeps its own name (so a picker still offers "max")
+    // but is sent as the vendor's top level; a vendor level the protocol cannot
+    // express is dropped instead of being offered and silently clamped.
+    const sent = CLIENT_TOPS.includes(l) ? top : l
+    if (!allowed.includes(sent) || seen.has(name)) continue
+    seen.add(name)
+    // Both chat and Responses take reasoning_effort; chat also takes a thinking
+    // budget, which is the finer control and the one ZenMux documents for
+    // subscriptions (see reasoning.html). Send the effort name — it is what
+    // magpie and the vendor agree on.
+    out[name] = { reasoningEffort: sent }
+  }
+  // ZenMux's chat adapters also accept a thinking budget. Offer the top level as
+  // a budget too, so a client that asks for the maximum does not have to rely on
+  // the vendor's own rounding of "high".
+  // The highest level this protocol can express gets an explicit budget too, so
+  // the vendor is told how hard to think instead of inferring it from max_tokens.
+  for (const name of Object.keys(out)) {
+    const budget = THINKING_BUDGETS[name] ?? THINKING_BUDGETS[top]
+    if (out[name].reasoningEffort === top) {
+      out[name] = { reasoningEffort: top, thinking: { type: "enabled", budget_tokens: budget } }
+    }
   }
   return Object.keys(out).length ? out : undefined
 }
@@ -502,6 +521,13 @@ export function modelRow(m, base = {}, { subscription = false, api, dev, protoco
 // which is the only protocol every model speaks.
 export const PROTOCOLS = Object.freeze(["messages", "responses", "chat"])
 
+// Routing order, which is not the same thing: magpie forwards the effort on
+// Responses (reasoning.effort) and on chat completions (reasoning_effort as it
+// came), but rewrites every Messages request's thinking field to {adaptive},
+// which drops the level entirely. So a model is asked on Responses first, then
+// chat, and only on Messages when that is all it has.
+export const ROUTING_ORDER = Object.freeze(["responses", "chat", "messages"])
+
 const PROTOCOL_ALIASES = new Map([
   ["anthropic", "messages"],
   ["anthropic-messages", "messages"],
@@ -558,11 +584,50 @@ export function collectProtocols(entry) {
   return out
 }
 
-// resolveProtocol picks one protocol the model speaks, best first. No list (a
-// model the catalogue does not name) means chat, which every model has.
-export function resolveProtocol(entry) {
+// collectReasoningProtocols says which protocols a model's adapters actually
+// accept a reasoning control on. Plenty of models list a Messages endpoint that
+// carries no thinking parameter at all: routing one of those to Messages throws
+// the effort away before the request even leaves magpie.
+const REASONING_PARAMS = ["reasoning_effort", "reasoning", "thinking", "enable_thinking", "thinking_budget"]
+
+export function collectReasoningProtocols(entry) {
+  const out = new Set()
+  if (!isObj(entry)) return out
+  const consider = (api, params) => {
+    const protocol = PROTOCOL_ALIASES.get(String(api ?? "").trim().toLowerCase())
+    if (!protocol) return
+    if (Array.isArray(params) && params.some((p) => REASONING_PARAMS.includes(String(p)))) out.add(protocol)
+  }
+  for (const ep of Array.isArray(entry.endpoints) ? entry.endpoints : []) {
+    for (const adapter of Array.isArray(ep?.adapters) ? ep.adapters : []) {
+      consider(adapter?.api, adapter?.supported_parameters)
+    }
+    consider(ep?.api, ep?.supported_parameters)
+  }
+  return out
+}
+
+// resolveProtocol picks one protocol the model speaks, best first.
+//
+// Order of business:
+//  1. a model that reasons goes on a protocol whose adapter takes a reasoning
+//     parameter — otherwise the level is silently lost (the "max became high"
+//     bug: deepseek/deepseek-v4.1-flash lists messages and responses endpoints
+//     that carry no thinking parameter, and only chat.completions does);
+//  2. otherwise every protocol it lists is fine;
+//  3. within that, the catalogue's own preference first, then our order.
+export function resolveProtocol(entry, { reasoning = false } = {}) {
   const supported = collectProtocols(entry)
-  for (const protocol of PROTOCOLS) if (supported.has(protocol)) return protocol
+  if (!supported.size) return "chat"
+
+  let pool = supported
+  if (reasoning) {
+    const withReasoning = collectReasoningProtocols(entry)
+    const narrowed = new Set([...supported].filter((p) => withReasoning.has(p)))
+    if (narrowed.size) pool = narrowed
+  }
+
+  for (const protocol of ROUTING_ORDER) if (pool.has(protocol)) return protocol
   return "chat"
 }
 
@@ -572,9 +637,19 @@ export function protocolMap(entries) {
   for (const entry of Array.isArray(entries) ? entries : []) {
     const slug = entry?.slug ?? entry?.model_slug
     if (typeof slug !== "string" || !slug) continue
-    out.set(slug, resolveProtocol(entry))
+    out.set(slug, resolveProtocol(entry, { reasoning: reasoningOf(entry) }))
   }
   return out
+}
+
+// reasoningOf is whether the catalogue says this model reasons.
+export function reasoningOf(entry) {
+  if (!isObj(entry)) return false
+  if (entry.supports_reasoning === true || Number(entry.supports_reasoning) > 0) return true
+  for (const ep of Array.isArray(entry.endpoints) ? entry.endpoints : []) {
+    if (ep?.supports_reasoning === true || Number(ep?.supports_reasoning) > 0) return true
+  }
+  return false
 }
 
 // costOf turns GET /api/v1/models' pricings into magpie's per-million-token

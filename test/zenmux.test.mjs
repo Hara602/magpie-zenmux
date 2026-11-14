@@ -11,6 +11,7 @@ import {
   budgetForLevel,
   apiFor,
   collectProtocols,
+  collectReasoningProtocols,
   costOf,
   entries,
   isChatModel,
@@ -211,19 +212,52 @@ test("entries accepts arrays, strings and objects", () => {
 })
 
 
-test("resolveProtocol prefers Messages, then Responses, then chat", () => {
-  // ZenMux's own OpenCode plugin uses this order: cache_control lives only in
-  // the Anthropic protocol, then Responses adds reasoning state, chat last.
+test("resolveProtocol asks a model where the reasoning level survives", () => {
+  // magpie forwards the effort on Responses (reasoning.effort) and on chat
+  // (reasoning_effort as sent), but rewrites Messages' thinking to {adaptive}
+  // and loses the level. So Responses comes first, then chat, then Messages.
   assert.equal(resolveProtocol({ suitable_api: "chat.completions" }), "chat")
   assert.equal(resolveProtocol({ suitable_api: "chat.completions,responses" }), "responses")
-  assert.equal(resolveProtocol({ suitable_api: "chat.completions,messages,responses" }), "messages")
-  assert.equal(resolveProtocol({ suitable_api: "responses,messages,chat.completions" }), "messages")
   assert.equal(resolveProtocol({ suitable_api: "messages" }), "messages")
-  assert.equal(resolveProtocol({ suitable_api: "responses" }), "responses")
-  // an unexpected protocol (imagen, videos, …) falls back to chat
+  assert.equal(
+    resolveProtocol({ suitable_api: "chat.completions,messages,responses" }),
+    "responses",
+  )
+  // an unexpected protocol falls back to chat, which every model speaks
   assert.equal(resolveProtocol({ suitable_api: "imagen" }), "chat")
   assert.equal(resolveProtocol({}), "chat")
   assert.equal(resolveProtocol(undefined), "chat")
+})
+
+test("resolveProtocol keeps a reasoning model off a protocol that drops the level", () => {
+  // The reported bug: deepseek/deepseek-v4.1-flash lists Messages and Responses
+  // endpoints, but only chat.completions accepts reasoning_effort/thinking there,
+  // so routing it to Messages threw "max" away.
+  const deepseek = {
+    suitable_api: "chat.completions",
+    supports_reasoning: 1,
+    endpoints: [
+      { api: "messages", adapters: [{ api: "messages", supported_parameters: ["max_tokens", "cache_control"] }] },
+      { api: "responses", adapters: [{ api: "responses", supported_parameters: ["instructions", "max_output_tokens"] }] },
+      { api: "chat.completions", adapters: [{ api: "chat.completions", supported_parameters: ["reasoning_effort", "thinking"] }] },
+    ],
+  }
+  assert.deepEqual([...collectReasoningProtocols(deepseek)], ["chat"])
+  assert.equal(resolveProtocol(deepseek, { reasoning: true }), "chat")
+
+  // A model that can carry the level on Responses and Messages goes to Responses.
+  const claude = {
+    suitable_api: "chat.completions,messages,responses",
+    supports_reasoning: 1,
+    endpoints: [
+      { adapters: [{ api: "messages", supported_parameters: ["thinking", "cache_control"] }] },
+      { adapters: [{ api: "responses", supported_parameters: ["reasoning", "reasoning_effort"] }] },
+    ],
+  }
+  assert.equal(resolveProtocol(claude, { reasoning: true }), "responses")
+
+  // Without the reasoning flag the narrowing does not apply.
+  assert.equal(resolveProtocol(deepseek), "responses")
 })
 
 test("collectProtocols reads every place a protocol is named", () => {
@@ -255,7 +289,7 @@ test("protocolMap collapses the catalogue by slug and keeps the first protocol",
     { slug: "" },
   ])
   assert.equal(map.get("a/chat-only"), "chat")
-  assert.equal(map.get("b/all"), "messages")
+  assert.equal(map.get("b/all"), "responses")
   assert.equal(map.get("c/resp"), "responses")
   assert.equal(map.size, 3)
   assert.equal(protocolMap(undefined).size, 0)
@@ -278,26 +312,29 @@ test("modelRow's own api wins over models.dev's (routing regression)", () => {
 })
 
 
-test("variantsForProtocol renames a client's top level to the vendor's", () => {
+test("variantsForProtocol keeps the client's top level, sends the vendor's", () => {
   // The reported bug: a client asks for "max", magpie cannot translate that
-  // name and clamps it back to high. Responses has a real top level (xhigh), so
-  // the level is renamed instead of degraded.
+  // name and clamps it back to high. The level keeps its name so a picker still
+  // offers it, but it is sent as the vendor's top level plus a real budget.
   const resp = variantsForProtocol("responses", ["low", "high", "max"])
-  assert.deepEqual(Object.keys(resp), ["low", "high", "xhigh"])
-  assert.equal(resp.xhigh.reasoningEffort, "xhigh")
+  assert.deepEqual(Object.keys(resp), ["low", "high", "max"])
+  assert.equal(resp.max.reasoningEffort, "xhigh")
+  assert.equal(resp.max.thinking.budget_tokens, 32768)
 
-  // chat completions have nothing above high, so a "max" collapses onto high and
-  // no level is offered that would be silently clamped.
+  // chat completions have nothing above high, so "max" is sent as high — with a
+  // budget that says how much thinking was actually asked for.
   const chat = variantsForProtocol("chat", ["low", "high", "max"])
-  assert.deepEqual(Object.keys(chat), ["low", "high"])
+  assert.deepEqual(Object.keys(chat), ["low", "high", "max"])
+  assert.equal(chat.max.reasoningEffort, "high")
+  assert.equal(chat.max.thinking.budget_tokens, 32768)
+  assert.equal(chat.high.thinking.budget_tokens, 16384)
 
   // Without declared levels, the protocol's own vocabulary is offered.
   assert.deepEqual(Object.keys(variantsForProtocol("responses")), ["none", "minimal", "low", "medium", "high", "xhigh"])
   assert.deepEqual(Object.keys(variantsForProtocol("chat")), ["minimal", "low", "medium", "high"])
 
-  // Messages carries budgets, not effort names: the plugin leaves the named
-  // levels alone and turns magpie's collapsed "adaptive" into a real budget
-  // when the request goes out (see the request test below).
+  // Messages carries budgets, not effort names: the named levels are left alone
+  // and magpie's collapsed "adaptive" is turned into a budget on the way out.
   assert.equal(variantsForProtocol("messages", ["low", "high"]), undefined)
 })
 
@@ -775,8 +812,10 @@ test("models hook aligns every row with models.dev", async () => {
     )
     const known = rows[LIVE_DEEPSEEK.id]
     assert.ok(known)
-    // chat completions top out at high, so a client's "max" is renamed, not offered as a level that would be clamped
-    assert.deepEqual(Object.keys(known.variants), ["low", "high"])
+    // "max" keeps its name but is sent as chat's top level (high) with a budget
+    assert.deepEqual(Object.keys(known.variants), ["low", "high", "max"])
+    assert.equal(known.variants.max.reasoningEffort, "high")
+    assert.equal(known.variants.max.thinking.budget_tokens, 32768)
     assert.equal(known.name, "DeepSeek V4.1 Flash")
     assert.equal(known.limit.output, 384000)
 
