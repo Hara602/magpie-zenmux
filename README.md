@@ -195,6 +195,41 @@ those 219 models). magpie has to show models an agent can actually call, so:
 Non-chat models are listed by default so the plan is fully visible; a *chat* request to one
 of them fails at ZenMux. `includeNonChat: false` hides them.
 
+## Which API each model is asked on
+
+ZenMux serves one model over several protocols, and each is a different request
+shape. The plugin asks each model on the best protocol it speaks, in ZenMux's own
+order — the same order its official OpenCode plugin uses:
+
+| Order | Protocol | Base | Why |
+| --- | --- | --- | --- |
+| 1 | Anthropic Messages (`@ai-sdk/anthropic`) | `/api/anthropic/v1` | the only protocol that carries `cache_control`, so prompt caching works |
+| 2 | OpenAI Responses (`@ai-sdk/openai`) | `/api/v1` | reasoning summaries and conversation state |
+| 3 | Chat completions (`@ai-sdk/openai-compatible`) | `/api/v1` | the only protocol every model speaks |
+
+The protocol comes from ZenMux's public catalogue
+(`/api/frontend/model/available/list`, each model's `suitable_api`). On the current
+catalogue that is 110 chat, 80 Messages and 28 Responses models out of 218.
+
+61 of the chat models — including `deepseek/deepseek-v4.1-flash` and
+`qwen/qwen3.8-max-0902` — speak **only** chat completions, so they stay there; a
+Responses-only default would have broken them.
+
+`options.protocol`:
+
+| Value | Effect |
+| --- | --- |
+| `"auto"` (default) | route per model, as above |
+| `"chat"` | everything on chat completions (the old behaviour) |
+| `"responses"` / `"messages"` | force one protocol; models that cannot speak it will fail |
+
+`options.store` (default `false`): Responses keeps the conversation on ZenMux's
+side (`store: true`). The plugin turns that off unless you ask for it.
+
+Two small things it also does on the wire: it adds `anthropic-version: 2023-06-01`
+to Messages requests (ZenMux requires it), and `stream_options.include_usage` to
+streamed chat requests so a streamed turn still reports its tokens.
+
 ## Options
 
 `plugins.json` options, e.g. `magpie plugin options zenmux '{"plan":"pro"}'` when the
@@ -206,7 +241,9 @@ plugin is added through the app; a folder entry can also carry `"options"`:
     "models": ["openai/", "*/kimi-*"],  // only these (exact id, vendor/ prefix or glob)
     "exclude": ["deepseek/deepseek-v4-flash"],
     "allModels": true,             // list every chat model, ignore the plan filter
-    "includeNonChat": true,         // also list image / video / audio / embedding models
+    "includeNonChat": true,        // also list image / video / audio / embedding models
+    "protocol": "auto",            // auto | chat | responses | messages
+    "store": false,                // Responses: keep the conversation on ZenMux's side
 } }
 ```
 
@@ -238,6 +275,26 @@ ZENMUX_PUBLIC_API_BASE=http://127.0.0.1:3599/api m quota
 `anthropic ✗`/`gemini ✗` — that command probes `provider/api` (`…/api/v1`) for every
 protocol, while ZenMux's Anthropic and Vertex endpoints live at `/api/anthropic/v1` and
 `/api/vertex-ai`. Agents still use chat, so nothing is missing.
+
+## DSH web search
+
+DeepSeek Harness (dsh) configures its built-in `web-search-deepseek` separately from
+chat. This provider plugin supplies ZenMux models, authentication and quota; it does
+not configure dsh's search backend. A successful chat request does not verify native
+web search.
+
+If search reports `DeepSeek returned no web_search_tool_result blocks`, the response
+lacked the structured native search block dsh requires. Plain text, links or ordinary
+function tool calls do not satisfy it. Check dsh's **Plugins → Built-in plugin settings
+→ Web search** for the search endpoint, and verify the configured search model.
+A search routed through Magpie also
+requires Magpie either to preserve upstream native search results or to execute search
+through a configured search source and return those blocks. Check **Magpie's Settings
+→ Models → Web search** and its **Routing** page too: a signed-in ChatGPT/Codex account
+can search for a ZenMux chat model. Some dsh versions expose the search model only in
+deployment configuration or request events. Choose any endpoint change yourself and
+use credentials accepted by that endpoint.
+See the [Windows / dsh troubleshooting steps](docs/windows.md#dsh-web-search).
 
 ## Publishing
 

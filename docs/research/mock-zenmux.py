@@ -17,6 +17,8 @@ from urllib.parse import urlparse, parse_qs
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODELS = json.load(open(os.path.join(HERE, "zenmux-models-probe.json"), encoding="utf-8"))
 PLANS = json.load(open(os.path.join(HERE, "probe-get_all_plans.json"), encoding="utf-8"))
+CATALOGUE = json.load(open(os.path.join(HERE, "zenmux-catalogue-probe.json"), encoding="utf-8"))
+PROVIDER_LOG = os.path.join(HERE, ".mock-provider-log.json")
 
 SUBSCRIPTION = {
     "success": True,
@@ -81,6 +83,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, MODELS)
         if u.path == "/api/subscription/public/get_all_plans":
             return self._json(200, PLANS)
+        if u.path == "/api/frontend/model/available/list":
+            return self._json(200, CATALOGUE)
         if u.path == "/api/v1/management/subscription/detail":
             return self._json(200, SUBSCRIPTION)
         if u.path == "/api/v1/management/generation":
@@ -101,6 +105,20 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(raw or b"{}")
         except Exception:
             body = {}
+        import threading
+        if u.path in ("/api/v1/chat/completions", "/api/v1/responses", "/api/anthropic/v1/messages"):
+            try:
+                seen = json.load(open(PROVIDER_LOG)) if os.path.exists(PROVIDER_LOG) else []
+            except Exception:
+                seen = []
+            seen.append({
+                "path": u.path,
+                "auth": (self.headers.get("authorization") or "")[:12],
+                "anthropic_version": self.headers.get("anthropic-version"),
+                "store": body.get("store") if isinstance(body, dict) else None,
+                "stream_options": body.get("stream_options") if isinstance(body, dict) else None,
+            })
+            json.dump(seen, open(PROVIDER_LOG, "w"), indent=1)
         if u.path != "/api/v1/chat/completions":
             return self._json(404, {"error": {"message": "no such route: " + u.path}})
         # A stand-in for ZenMux's key check: sk-subs-… / sk-payg-… work.

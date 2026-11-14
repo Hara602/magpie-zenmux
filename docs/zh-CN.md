@@ -181,6 +181,38 @@ magpie 里要放的是 agent 真能调用的模型，所以会逐层收窄：
 非聊天模型是**故意**不列的：在聊天 agent 里选了视频模型，第一个请求就会失败。
 想全部列出来（例如给走 `/v1/images/generations` 的用法），设 `options.includeNonChat: true`。
 
+## 每个模型走哪个 API（0.1.9 起）
+
+ZenMux 同一个模型可以用多种协议调用，每种协议的请求形状不同。插件按 **ZenMux 官方
+OpenCode 插件同款顺序**，为每个模型选它支持的最好协议：
+
+| 顺序 | 协议 | 基址 | 为什么 |
+| --- | --- | --- | --- |
+| 1 | Anthropic Messages（`@ai-sdk/anthropic`） | `/api/anthropic/v1` | 只有这个协议能表达 `cache_control`，prompt cache 才真正生效 |
+| 2 | OpenAI Responses（`@ai-sdk/openai`） | `/api/v1` | 推理摘要 + 会话状态 |
+| 3 | Chat completions（`@ai-sdk/openai-compatible`） | `/api/v1` | 所有模型都支持的兜底 |
+
+协议来源是 ZenMux 的公开富目录（`/api/frontend/model/available/list` 里每个模型的
+`suitable_api`）。当前目录下 218 个模型里：110 个 chat、80 个 Messages、28 个 Responses。
+
+其中 61 个聊天模型——**包括你用到的 `deepseek/deepseek-v4.1-flash` 和
+`qwen/qwen3.8-max-0902`——只支持 chat completions**，所以它们仍然走 chat；
+如果默认改成 Responses，这些模型会直接不可用。
+
+`options.protocol`：
+
+| 值 | 效果 |
+| --- | --- |
+| `"auto"`（默认） | 按上表逐模型路由 |
+| `"chat"` | 全部走 chat（旧行为） |
+| `"responses"` / `"messages"` | 强制某一种，不支持该协议的模型会失败 |
+
+`options.store`（默认 `false`）：Responses 默认会把会话留在 ZenMux 服务端（`store: true`），
+插件默认关掉，除非你显式打开。
+
+另外两个线缆细节：Messages 请求自动补 `anthropic-version: 2023-06-01`（ZenMux 要求），
+流式 chat 请求自动加 `stream_options.include_usage`，让流式回合也能统计 token。
+
 ## 登录报 403 时看这里
 
 ZenMux 对多种情况都回同一句 `403 access_denied` / “You have no permission to access this

@@ -38,9 +38,11 @@ import {
   keyOf,
   managementKeyOf,
   matches,
+  apiFor,
   modelRow,
   modelsDevCachePaths,
   planModelSets,
+  protocolMap,
   subscriptionToUsage,
 } from "./zenmux.mjs"
 
@@ -49,6 +51,10 @@ import {
 const API = (process.env.ZENMUX_API_BASE || ZENMUX_API).replace(/\/+$/, "")
 const MANAGEMENT_API = (process.env.ZENMUX_MANAGEMENT_API_BASE || ZENMUX_MANAGEMENT_API).replace(/\/+$/, "")
 const PUBLIC_API = (process.env.ZENMUX_PUBLIC_API_BASE || ZENMUX_PUBLIC_API).replace(/\/+$/, "")
+// ZenMux's Anthropic-compatible protocol lives beside /api/v1, not under it.
+const ANTHROPIC_API = (
+  process.env.ZENMUX_ANTHROPIC_API_BASE || `${new URL(API).origin}/api/anthropic/v1`
+).replace(/\/+$/, "")
 
 const DEFAULT_MODELS = {
   // Last resort, for a host with no models.dev catalogue whose live list also
@@ -101,6 +107,26 @@ async function fetchModels(key, { signal } = {}) {
   const body = await res.json()
   const data = Array.isArray(body?.data) ? body.data : []
   return data
+}
+
+// The rich catalogue says which protocol each model speaks. It needs no key,
+// changes rarely, and is only fetched to route models, so one copy an hour.
+let catalogueCache = { at: 0, map: null }
+const CATALOGUE_TTL = 3600_000
+
+async function fetchProtocolMap({ signal } = {}) {
+  const now = Date.now()
+  if (catalogueCache.map && now - catalogueCache.at < CATALOGUE_TTL) return catalogueCache.map
+  const res = await fetch(`${PUBLIC_API}/frontend/model/available/list`, {
+    method: "GET",
+    headers: { accept: "application/json" },
+    ...(signal ? { signal } : {}),
+  })
+  if (!res.ok) throw new Error(`ZenMux answered HTTP ${res.status}`)
+  const body = await res.json()
+  const map = protocolMap(body?.data)
+  if (map.size) catalogueCache = { at: now, map }
+  return map
 }
 
 function messageOf(text) {
@@ -295,7 +321,7 @@ async function annotate(res) {
 // request is the account's fetch: it signs every request with the subscription
 // key and asks chat completions for usage on streams, so a streamed turn still
 // reports its tokens.
-async function request(key, input, init) {
+async function request(key, input, init, { store = false } = {}) {
   const headers = new Headers(init?.headers ?? {})
   if (!headers.has("authorization")) headers.set("authorization", `Bearer ${key}`)
   headers.set("accept", headers.get("accept") ?? "application/json")
@@ -306,20 +332,41 @@ async function request(key, input, init) {
     if (name.toLowerCase().startsWith("x-magpie-")) headers.delete(name)
   }
 
+  const url = String(input)
+  // ZenMux's Anthropic-compatible protocol wants this on every request; the
+  // AI SDK usually sets it, so only fill it in when it is missing.
+  if (/\/messages(?:[?#]|$)/.test(url) && !headers.has("anthropic-version")) {
+    headers.set("anthropic-version", "2023-06-01")
+  }
+
   let body = init?.body
-  if (typeof body === "string" && /\/chat\/completions(?:[?#]|$)/.test(String(input))) {
+  if (typeof body === "string") {
+    let parsed
     try {
-      const parsed = JSON.parse(body)
-      if (isObj(parsed) && parsed.stream === true) {
+      parsed = JSON.parse(body)
+    } catch {
+      parsed = undefined // Not JSON we know: send it as it came.
+    }
+    if (isObj(parsed)) {
+      let changed = false
+      // A streamed chat turn should still report its tokens.
+      if (/\/chat\/completions(?:[?#]|$)/.test(url) && parsed.stream === true) {
         parsed.stream_options = {
           ...(isObj(parsed.stream_options) ? parsed.stream_options : {}),
           include_usage: true,
         }
+        changed = true
+      }
+      // Responses keeps the conversation on ZenMux's side unless told not to;
+      // that is a privacy decision, so the default here is off.
+      if (/\/responses(?:[?#]|$)/.test(url) && parsed.store !== store) {
+        parsed.store = store
+        changed = true
+      }
+      if (changed) {
         body = JSON.stringify(parsed)
         headers.delete("content-length")
       }
-    } catch {
-      // Not JSON we know: send it as it came.
     }
   }
   const res = await fetch(input, { ...init, headers, ...(body !== undefined ? { body } : {}) })
@@ -397,6 +444,14 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
   const exclude = entries(options?.exclude ?? options?.notModels)
   const allModels = options?.allModels === true || options?.allModels === "true"
   const probeModelOption = typeof options?.probeModel === "string" ? options.probeModel.trim() : ""
+  // auto: each model on the best protocol it speaks (Messages > Responses >
+  // chat). chat: everything on chat completions, the safe whole-catalogue
+  // choice. responses / messages: force one, for a model set known to speak it.
+  const requested = typeof options?.protocol === "string" ? options.protocol.trim().toLowerCase() : "auto"
+  const protocolOption =
+    requested === "chat" || requested === "responses" || requested === "messages" ? requested : "auto"
+  // Responses defaults to store:true — the conversation kept on ZenMux's side.
+  const storeOption = options?.store === true || options?.store === "true"
   // Off by default: an agent picks chat models, so a video or embedding model in
   // the picker is a trap. Turn it on to see everything the plan serves.
   const includeNonChat = options?.includeNonChat === undefined ? true : options.includeNonChat === true || options.includeNonChat === "true"
@@ -548,9 +603,11 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
         const key = keyOf(auth)
         if (!key) return {}
         return {
-          baseURL: API,
+          // No baseURL here: each model carries its own api url (chat on
+          // /api/v1, Messages on /api/anthropic/v1), and a baseURL would win
+          // over it.
           apiKey: key,
-          fetch: (input_, init) => request(key, input_, init),
+          fetch: (input_, init) => request(key, input_, init, { store: storeOption }),
         }
       },
 
@@ -650,6 +707,23 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
         // names. Absent (a magpie with no snapshot yet) is fine.
         const dev = modelsDevModels()
 
+        // Which protocol each model is asked on. A catalogue that cannot be
+        // read leaves every model on chat, which all of them speak.
+        let protocols = null
+        if (protocolOption === "auto") {
+          try {
+            protocols = await fetchProtocolMap()
+          } catch {
+            protocols = null
+          }
+        }
+
+        const apiOf = (id) => {
+          const protocol =
+            protocolOption !== "auto" ? protocolOption : protocols?.get(id) ?? "chat"
+          return { id, ...apiFor(protocol, { chatApi: API, anthropicApi: ANTHROPIC_API }) }
+        }
+
         const build = (filter) => {
           const out = {}
           for (const m of live) {
@@ -660,7 +734,7 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
             if (exclude.length && exclude.some((p) => matches(m.id, p))) continue
             out[m.id] = modelRow(m, base?.[m.id], {
               subscription,
-              api: { id: m.id, url: API, npm: NPM },
+              api: apiOf(m.id),
               dev: dev[m.id],
             })
           }
@@ -682,7 +756,7 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
           if (one) {
             models[pattern] = modelRow(one, known, {
               subscription,
-              api: { id: one.id, url: API, npm: NPM },
+              api: apiOf(one.id),
               dev: dev[one.id],
             })
           }

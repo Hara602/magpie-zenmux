@@ -1,0 +1,1017 @@
+{
+"success": true,
+"data": [
+{
+"slug": "bytedance/doubao-seedream-5.5",
+"suitable_api": "imagen"
+},
+{
+"slug": "google/gemini-4-hydrogen",
+"suitable_api": "gemini,chat.completions,messages,responses"
+},
+{
+"slug": "baidu/ernie-5.5-flash-preview",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "google/gemini-4-carbon",
+"suitable_api": ""
+},
+{
+"slug": "anthropic/claude-fable-5.2",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "minimax/minimax-h3-image",
+"suitable_api": "images"
+},
+{
+"slug": "minimax/minimax-h3-image-highspeed",
+"suitable_api": "images"
+},
+{
+"slug": "google/gemini-omni-1.2-flash",
+"suitable_api": "interactions,chat.completions"
+},
+{
+"slug": "openai/gpt-image-2.6-flare",
+"suitable_api": "images"
+},
+{
+"slug": "openai/gpt-image-2.6-sunburst",
+"suitable_api": "images"
+},
+{
+"slug": "qwen/qwen-audio-3.1-tts-next",
+"suitable_api": "audio.speech"
+},
+{
+"slug": "tencent/hy4",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "meituan/longcat-2.5",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "openai/gpt-6.1-terra",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "minimax/minimax-h3-highspeed",
+"suitable_api": "videos"
+},
+{
+"slug": "minimax/minimax-h3-lite",
+"suitable_api": "videos"
+},
+{
+"slug": "moonshotai/kimi-k3.1-pro",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "moonshotai/kimi-k3.1-pro-highspeed",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "minimax/minimax-m3.1-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "deepseek/deepseek-v4.1-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "atria-asi/atria-dawn",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "typesafe/jev-1.14",
+"suitable_api": "systemone"
+},
+{
+"slug": "google/gemini-4-argon",
+"suitable_api": "gemini,chat.completions,messages,responses"
+},
+{
+"slug": "inclusionai/llada-image",
+"suitable_api": "images"
+},
+{
+"slug": "meta/muse-wonder-1.0",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "cloudflare/clef-omni",
+"suitable_api": "decisions"
+},
+{
+"slug": "bytedance/doubao-seedream-5.0-flash",
+"suitable_api": "imagen"
+},
+{
+"slug": "mistralai/mistral-large-4",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "anthropic/claude-haiku-5.5",
+"suitable_api": "messages,chat.completions,responses"
+},
+{
+"slug": "google/gemini-nano-banana-2.1",
+"suitable_api": "gemini"
+},
+{
+"slug": "inclusionai/ling-3.1-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "bfl/flux-3-image",
+"suitable_api": "imagen"
+},
+{
+"slug": "cloudflare/clef",
+"suitable_api": "decisions"
+},
+{
+"slug": "cloudflare/clef-flash",
+"suitable_api": "decisions"
+},
+{
+"slug": "openai/gpt-6.1-sol",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "qwen/qwen-audio-3.1-asr-flash",
+"suitable_api": "audio.transcriptions"
+},
+{
+"slug": "anthropic/claude-sonnet-5.5",
+"suitable_api": "messages,chat.completions,responses"
+},
+{
+"slug": "qwen/qwen3.8-omni-flash",
+"suitable_api": "chat.completions,messages"
+},
+{
+"slug": "meituan/longcat-2.5-preview",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "google/gemini-3.8-flash-lite-tts",
+"suitable_api": "gemini"
+},
+{
+"slug": "google/gemini-3.8-flash-tts",
+"suitable_api": "gemini"
+},
+{
+"slug": "openai/gpt-6-luna",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "openai/gpt-6-sol",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "z-ai/glm-5.3-prime",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "anthropic/claude-opus-5.5",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "inclusionai/ming-image-0.1-design",
+"suitable_api": "images"
+},
+{
+"slug": "inclusionai/ming-image-0.1-design-layer",
+"suitable_api": "images"
+},
+{
+"slug": "tencent/hy-image-v3.5-preview",
+"suitable_api": "imagen"
+},
+{
+"slug": "xiaomi/mimo-v2.6-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "xiaomi/mimo-v2.6-pro",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "xiaomi/mimo-v2.6-pro-ultraspeed",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "x-ai/grok-4.7",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "stepfun/step-5-preview",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "z-ai/glm-5.3-flashx",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "inclusionai/ling-3.0-flash-vl",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "typesafe/jev-1.13",
+"suitable_api": "systemone"
+},
+{
+"slug": "moonshotai/kimi-k2.8-preview",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "sakana/fugu-ultra-v2",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "openai/gpt-image-2.5-flare",
+"suitable_api": "images"
+},
+{
+"slug": "openai/gpt-image-2.5-sunburst",
+"suitable_api": "images"
+},
+{
+"slug": "inclusionai/ling-3.0-flash-sante",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "inclusionai/llada-image-turbo",
+"suitable_api": "images"
+},
+{
+"slug": "openai/gpt-6-astra",
+"suitable_api": "responses,chat.completions,messages"
+},
+{
+"slug": "meta/muse-spark-1.3",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "meta/muse-spark-1.3-contributor",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "google/gemini-3.8-flash",
+"suitable_api": "gemini,chat.completions,messages,responses"
+},
+{
+"slug": "minimax/minimax-h3-max",
+"suitable_api": "videos"
+},
+{
+"slug": "qwen/qwen3.8-max-0902",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "anthropic/claude-fable-5.1",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "google/gemini-omni-1.1-flash-preview",
+"suitable_api": "interactions,chat.completions"
+},
+{
+"slug": "tencent/hy4-preview",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "inclusionai/ling-3.0-flash-fin",
+"suitable_api": "chat.completions,responses,messages"
+},
+{
+"slug": "meta/muse-image-1.0",
+"suitable_api": "images"
+},
+{
+"slug": "qwen/qwen3.8-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "z-ai/glm-5.3-flash",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "alibaba/wan3.0-video",
+"suitable_api": "videos"
+},
+{
+"slug": "alibaba/wan3.0-video-prime",
+"suitable_api": "videos"
+},
+{
+"slug": "qwen/qwen3.8-27b",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "mindai/macaron-v1-tall",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "mindai/macaron-v1-venti",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "dots-studio/dots3-note-prev",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "klingai/kling-v3",
+"suitable_api": "imagen"
+},
+{
+"slug": "google/gemini-3.7-flash",
+"suitable_api": "gemini,chat.completions,messages,responses"
+},
+{
+"slug": "qwen/qwen3.8-2.4t-a95b",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "x-ai/grok-4.6",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "z-ai/glm-5.3",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "deepseek/deepseek-v4-pro",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "x-ai/grok-imagine-image-2.0",
+"suitable_api": "images"
+},
+{
+"slug": "pixverse/c1",
+"suitable_api": "videos"
+},
+{
+"slug": "pixverse/v6",
+"suitable_api": "videos"
+},
+{
+"slug": "sapiens-ai/agnes-image-2.1-flash",
+"suitable_api": "imagen"
+},
+{
+"slug": "sapiens-ai/agnes-2.5-flash",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "bytedance/doubao-seedance-2.5",
+"suitable_api": "veo"
+},
+{
+"slug": "meta/muse-spark-1.2",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "openai/gpt-transcribe",
+"suitable_api": "audio.transcriptions"
+},
+{
+"slug": "qwen/qwen-audio-3.0-tts-plus",
+"suitable_api": "audio.speech"
+},
+{
+"slug": "qwen/qwen-image-3.0",
+"suitable_api": "imagen"
+},
+{
+"slug": "qwen/qwen-image-3.0-pro",
+"suitable_api": "imagen"
+},
+{
+"slug": "bfl/flux-3-video",
+"suitable_api": "videos"
+},
+{
+"slug": "x-ai/grok-voice-stt-1.0",
+"suitable_api": "audio.transcriptions"
+},
+{
+"slug": "qwen/qwen3.8-max",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "sapiens-ai/agnes-2.5-pro",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "deepseek/deepseek-v4-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "klingai/kling-3.0",
+"suitable_api": "videos"
+},
+{
+"slug": "klingai/kling-3.0-omni",
+"suitable_api": "videos"
+},
+{
+"slug": "klingai/kling-3.0-turbo",
+"suitable_api": "videos"
+},
+{
+"slug": "minimax/minimax-h3",
+"suitable_api": "videos"
+},
+{
+"slug": "x-ai/grok-voice-tts-1.0",
+"suitable_api": "audio.speech"
+},
+{
+"slug": "qwen/qwen3.7-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "anthropic/claude-opus-5",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "inclusionai/ling-3.0-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "google/gemini-3.5-flash-lite",
+"suitable_api": "gemini,chat.completions,messages,responses"
+},
+{
+"slug": "google/gemini-3.6-flash",
+"suitable_api": "gemini,chat.completions,messages,responses"
+},
+{
+"slug": "moonshotai/kimi-k3",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "openai/gpt-5.6-luna",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "openai/gpt-5.6-sol",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "openai/gpt-5.6-terra",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "bytedance/doubao-seedream-5.0-pro",
+"suitable_api": "imagen"
+},
+{
+"slug": "meta/muse-spark-1.1",
+"suitable_api": "responses"
+},
+{
+"slug": "x-ai/grok-4.5",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "xiaomi/mimo-v2.5-asr",
+"suitable_api": "audio.transcriptions"
+},
+{
+"slug": "tencent/hy3",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "google/gemini-3.1-flash-lite-image",
+"suitable_api": "gemini"
+},
+{
+"slug": "anthropic/claude-sonnet-5",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "meituan/longcat-2.0",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "bytedance/doubao-seed-asr-2.0",
+"suitable_api": "audio.transcriptions"
+},
+{
+"slug": "bytedance/doubao-seed-2.1-pro",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "bytedance/doubao-seed-2.1-turbo",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "bytedance/doubao-seed-character",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "bytedance/doubao-seed-evolving",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "z-ai/glm-5.2",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "moonshotai/kimi-k2.7-code-highspeed",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "moonshotai/kimi-k2.7-code",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "google/gemini-3.1-flash-image",
+"suitable_api": "gemini"
+},
+{
+"slug": "google/gemini-3-pro-image",
+"suitable_api": "gemini"
+},
+{
+"slug": "anthropic/claude-fable-5",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "qwen/qwen3.7-plus",
+"suitable_api": "chat.completions,messages"
+},
+{
+"slug": "minimax/minimax-m3",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "stepfun/step-3.7-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "anthropic/claude-opus-4.8",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "x-ai/grok-build-0.1",
+"suitable_api": "chat.completions,messages"
+},
+{
+"slug": "sapiens-ai/agnes-video-v2.0",
+"suitable_api": "veo"
+},
+{
+"slug": "qwen/qwen3.7-max",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "google/gemini-embedding-2",
+"suitable_api": "embeddings"
+},
+{
+"slug": "google/gemini-3.5-flash",
+"suitable_api": "gemini,chat.completions,messages,responses"
+},
+{
+"slug": "baidu/ernie-5.1",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "google/gemini-3.1-flash-lite",
+"suitable_api": "chat.completions,messages,responses,gemini"
+},
+{
+"slug": "inclusionai/ring-2.6-1t",
+"suitable_api": "messages"
+},
+{
+"slug": "openai/chat-latest",
+"suitable_api": "responses,messages"
+},
+{
+"slug": "x-ai/grok-4.3",
+"suitable_api": "chat.completions,messages"
+},
+{
+"slug": "alibaba/happyhorse-1.0",
+"suitable_api": "veo"
+},
+{
+"slug": "openai/gpt-5.5",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "openai/gpt-5.5-pro",
+"suitable_api": "responses,chat.completions,messages"
+},
+{
+"slug": "google/gemini-3.1-flash-tts-preview",
+"suitable_api": "gemini"
+},
+{
+"slug": "inclusionai/ling-2.6-1t",
+"suitable_api": "messages"
+},
+{
+"slug": "inclusionai/ling-2.6-flash",
+"suitable_api": "messages"
+},
+{
+"slug": "openai/gpt-image-2",
+"suitable_api": "imagen"
+},
+{
+"slug": "moonshotai/kimi-k2.6",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "skyreels/skyreels-v4",
+"suitable_api": "veo"
+},
+{
+"slug": "anthropic/claude-opus-4.7",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "bytedance/doubao-seedance-2.0",
+"suitable_api": "veo"
+},
+{
+"slug": "google/gemma-4-26b-a4b-it",
+"suitable_api": "chat.completions,messages,responses,gemini"
+},
+{
+"slug": "google/veo-3.1-fast-generate-001",
+"suitable_api": "veo"
+},
+{
+"slug": "google/veo-3.1-lite-generate-001",
+"suitable_api": "veo"
+},
+{
+"slug": "z-ai/glm-5.1",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "google/gemma-4-31b-it",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "qwen/qwen3.6-plus",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "z-ai/glm-5v-turbo",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "minimax/minimax-m2.7",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "minimax/minimax-m2.7-highspeed",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "openai/gpt-5.4-mini",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "openai/gpt-5.4-nano",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "inclusionai/llada2.1-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "z-ai/glm-5-turbo",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "x-ai/grok-4.2-fast",
+"suitable_api": "chat.completions,messages"
+},
+{
+"slug": "x-ai/grok-4.2-fast-non-reasoning",
+"suitable_api": "chat.completions,messages"
+},
+{
+"slug": "openai/gpt-5.4",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "openai/gpt-5.4-pro",
+"suitable_api": "responses,chat.completions,messages"
+},
+{
+"slug": "qwen/qwen-image-2.0",
+"suitable_api": "imagen"
+},
+{
+"slug": "qwen/qwen-image-2.0-pro",
+"suitable_api": "imagen"
+},
+{
+"slug": "bytedance/doubao-seedream-5.0-lite",
+"suitable_api": "imagen"
+},
+{
+"slug": "qwen/qwen3.5-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "qwen/qwen3.6-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "google/gemini-3.1-pro-preview",
+"suitable_api": "gemini,chat.completions,messages,responses"
+},
+{
+"slug": "anthropic/claude-sonnet-4.6",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "qwen/qwen3.5-plus",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "bytedance/doubao-seed-2.0-code",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "bytedance/doubao-seed-2.0-lite",
+"suitable_api": "chat.completions,responses,messages"
+},
+{
+"slug": "bytedance/doubao-seed-2.0-mini",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "bytedance/doubao-seed-2.0-pro",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "minimax/minimax-m2.5",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "minimax/minimax-m2.5-lightning",
+"suitable_api": "messages"
+},
+{
+"slug": "z-ai/glm-5",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "openai/gpt-5.3-codex",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "anthropic/claude-opus-4.6",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "stepfun/step-3.5-flash",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "minimax/minimax-m2-her",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "z-ai/glm-4.7-flash-free",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "z-ai/glm-4.7-flashx",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "z-ai/glm-image",
+"suitable_api": "imagen"
+},
+{
+"slug": "openai/gpt-5.2-codex",
+"suitable_api": "responses,chat.completions,messages"
+},
+{
+"slug": "qwen/qwen3-rerank",
+"suitable_api": "rerank"
+},
+{
+"slug": "qwen/qwen3-vl-embedding",
+"suitable_api": "embeddings"
+},
+{
+"slug": "qwen/qwen3-vl-rerank",
+"suitable_api": "rerank"
+},
+{
+"slug": "google/veo-3.1-generate-001",
+"suitable_api": "veo"
+},
+{
+"slug": "z-ai/glm-4.7",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "minimax/minimax-m2.1",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "bytedance/doubao-seed-1.8",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "google/gemini-3-flash-preview",
+"suitable_api": "chat.completions,messages,responses,gemini"
+},
+{
+"slug": "bfl/flux-2-max",
+"suitable_api": "imagen"
+},
+{
+"slug": "openai/gpt-image-1.5",
+"suitable_api": "imagen"
+},
+{
+"slug": "openai/gpt-5.2-pro",
+"suitable_api": "responses,chat.completions,messages"
+},
+{
+"slug": "openai/gpt-5.2",
+"suitable_api": "responses,chat.completions,messages"
+},
+{
+"slug": "z-ai/glm-4.6v",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "z-ai/glm-4.6v-flash-free",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "z-ai/glm-4.6v-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "deepseek/deepseek-v3.2",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "mistralai/mistral-large-2512",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "bfl/flux-2-flex",
+"suitable_api": "imagen"
+},
+{
+"slug": "bfl/flux-2-pro",
+"suitable_api": "imagen"
+},
+{
+"slug": "anthropic/claude-opus-4.5",
+"suitable_api": "chat.completions,responses,messages"
+},
+{
+"slug": "openai/gpt-5.1",
+"suitable_api": "responses,chat.completions,messages"
+},
+{
+"slug": "openai/gpt-5.1-codex",
+"suitable_api": "responses,chat.completions,messages"
+},
+{
+"slug": "openai/gpt-5.1-codex-mini",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "bytedance/doubao-seed-code",
+"suitable_api": "chat.completions,responses"
+},
+{
+"slug": "openai/text-embedding-3-large",
+"suitable_api": "embeddings"
+},
+{
+"slug": "openai/text-embedding-3-small",
+"suitable_api": "embeddings"
+},
+{
+"slug": "minimax/minimax-m2",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "anthropic/claude-haiku-4.5",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "google/gemini-2.5-flash-image",
+"suitable_api": "gemini"
+},
+{
+"slug": "openai/gpt-5-pro",
+"suitable_api": "responses,chat.completions"
+},
+{
+"slug": "z-ai/glm-4.6",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "anthropic/claude-sonnet-4.5",
+"suitable_api": "chat.completions,messages,responses"
+},
+{
+"slug": "tencent/hy-image-v3.0",
+"suitable_api": "imagen"
+},
+{
+"slug": "openai/gpt-5-codex",
+"suitable_api": "responses,messages,chat.completions"
+},
+{
+"slug": "qwen/qwen3-vl-plus",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "qwen/qwen3-asr-flash",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "openai/gpt-5",
+"suitable_api": "responses,chat.completions,messages"
+},
+{
+"slug": "openai/gpt-5-mini",
+"suitable_api": "responses,chat.completions"
+},
+{
+"slug": "openai/gpt-5-nano",
+"suitable_api": "responses,chat.completions"
+},
+{
+"slug": "klingai/kling-v2",
+"suitable_api": ""
+},
+{
+"slug": "z-ai/glm-4.5",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "z-ai/glm-4.5-air",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "google/gemini-2.5-flash-lite",
+"suitable_api": "chat.completions,messages,gemini,responses"
+},
+{
+"slug": "google/gemini-2.5-flash",
+"suitable_api": "gemini,chat.completions,messages,responses"
+},
+{
+"slug": "openai/o4-mini",
+"suitable_api": ""
+},
+{
+"slug": "openai/gpt-4.1",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "openai/gpt-4.1-mini",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "openai/gpt-4.1-nano",
+"suitable_api": ""
+},
+{
+"slug": "meta/llama-4-scout-17b-16e-instruct",
+"suitable_api": "chat.completions,messages"
+},
+{
+"slug": "meta/llama-3.3-70b-instruct",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "openai/gpt-4o-mini",
+"suitable_api": "chat.completions"
+},
+{
+"slug": "openai/gpt-4o",
+"suitable_api": "chat.completions"
+}
+]
+}

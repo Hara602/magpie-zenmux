@@ -6,6 +6,9 @@ import { join } from "node:path"
 import { test } from "node:test"
 
 import {
+  AI_SDK,
+  apiFor,
+  collectProtocols,
   costOf,
   entries,
   isChatModel,
@@ -15,6 +18,8 @@ import {
   modelsDevLevels,
   modelsDevVariants,
   planModelSets,
+  protocolMap,
+  resolveProtocol,
   subscriptionToUsage,
 } from "../zenmux.mjs"
 import { ZenMuxBuilderAuthPlugin, _internal } from "../index.mjs"
@@ -200,6 +205,73 @@ test("entries accepts arrays, strings and objects", () => {
   assert.deepEqual(entries("a/b, c/d"), ["a/b", "c/d"])
   assert.deepEqual(entries({ "a/b": true }), ["a/b"])
   assert.deepEqual(entries(null), [])
+})
+
+
+test("resolveProtocol prefers Messages, then Responses, then chat", () => {
+  // ZenMux's own OpenCode plugin uses this order: cache_control lives only in
+  // the Anthropic protocol, then Responses adds reasoning state, chat last.
+  assert.equal(resolveProtocol({ suitable_api: "chat.completions" }), "chat")
+  assert.equal(resolveProtocol({ suitable_api: "chat.completions,responses" }), "responses")
+  assert.equal(resolveProtocol({ suitable_api: "chat.completions,messages,responses" }), "messages")
+  assert.equal(resolveProtocol({ suitable_api: "responses,messages,chat.completions" }), "messages")
+  assert.equal(resolveProtocol({ suitable_api: "messages" }), "messages")
+  assert.equal(resolveProtocol({ suitable_api: "responses" }), "responses")
+  // an unexpected protocol (imagen, videos, …) falls back to chat
+  assert.equal(resolveProtocol({ suitable_api: "imagen" }), "chat")
+  assert.equal(resolveProtocol({}), "chat")
+  assert.equal(resolveProtocol(undefined), "chat")
+})
+
+test("collectProtocols reads every place a protocol is named", () => {
+  const fromEndpoints = collectProtocols({
+    endpoints: [
+      { suitable_api: "chat.completions" },
+      { adapters: [{ api: "openai-responses" }] },
+    ],
+  })
+  assert.deepEqual([...fromEndpoints].sort(), ["chat", "responses"])
+
+  const spread = collectProtocols({ protocols: ["anthropic"], capabilities: { protocols: "messages" } })
+  assert.deepEqual([...spread], ["messages"])
+  assert.equal(collectProtocols(null).size, 0)
+})
+
+test("apiFor maps a protocol to the package and base that serve it", () => {
+  const bases = { chatApi: "https://z/api/v1", anthropicApi: "https://z/api/anthropic/v1" }
+  assert.deepEqual(apiFor("messages", bases), { url: bases.anthropicApi, npm: AI_SDK.messages })
+  assert.deepEqual(apiFor("responses", bases), { url: bases.chatApi, npm: AI_SDK.responses })
+  assert.deepEqual(apiFor("chat", bases), { url: bases.chatApi, npm: AI_SDK.chat })
+})
+
+test("protocolMap collapses the catalogue by slug and keeps the first protocol", () => {
+  const map = protocolMap([
+    { slug: "a/chat-only", suitable_api: "chat.completions" },
+    { slug: "b/all", suitable_api: "chat.completions,messages,responses" },
+    { model_slug: "c/resp", suitable_api: "responses" },
+    { slug: "" },
+  ])
+  assert.equal(map.get("a/chat-only"), "chat")
+  assert.equal(map.get("b/all"), "messages")
+  assert.equal(map.get("c/resp"), "responses")
+  assert.equal(map.size, 3)
+  assert.equal(protocolMap(undefined).size, 0)
+})
+
+test("modelRow's own api wins over models.dev's (routing regression)", () => {
+  // models.dev entries carry their own api {npm,url}; if that survived, the
+  // plugin's protocol routing would be silently ignored for every known model.
+  const live = { id: "a/b", display_name: "B", capabilities: { reasoning: false }, output_modalities: ["text"] }
+  const base = {
+    id: "a/b",
+    api: { id: "a/b", url: "https://models.dev/v1", npm: "@ai-sdk/openai-compatible" },
+    limit: { context: 1000, output: 100 },
+  }
+  const routed = modelRow(live, base, {
+    api: { id: "a/b", url: "https://zenmux.ai/api/anthropic/v1", npm: "@ai-sdk/anthropic" },
+  })
+  assert.equal(routed.api.npm, "@ai-sdk/anthropic")
+  assert.equal(routed.api.url, "https://zenmux.ai/api/anthropic/v1")
 })
 
 test("probeCandidates prefers mainstream models, then cheap ones", () => {

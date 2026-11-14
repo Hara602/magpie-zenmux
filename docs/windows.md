@@ -113,6 +113,68 @@ magpie plugin rm opencode-zenmux-auth
 | 之前装过官方 `@zenmux/opencode-oauth` | 两者都签 `zenmux`，只一个生效。先 `magpie plugin rm @zenmux/opencode-oauth`，或 `magpie plugin use opencode-zenmux-auth zenmux` 指定 |
 | 路径报错 / 找不到插件 | PowerShell 路径要带引号；别用 `Program Files` 等需要管理员权限的位置 |
 
+<a id="dsh-web-search"></a>
+### dsh 聊天正常，但网页搜索报 `no web_search_tool_result blocks`
+
+如果使用 **DeepSeek Harness（dsh）→ Magpie → 本插件 → ZenMux** 聊天，dsh 的内置
+`web-search-deepseek` 仍会另外发送一次搜索请求。它有独立的 Messages API base URL、
+模型和凭据配置，不会因为聊天接通就自动获得搜索能力。本插件只提供 ZenMux 的模型、
+鉴权与额度查询，没有实现或配置 dsh 的搜索提供方。
+
+报错例如：
+
+```text
+DeepSeek returned no web_search_tool_result blocks;
+the request may not have triggered native web search
+The web request used endpoint "http://127.0.0.1:3425/v1/messages".
+```
+
+这表示 dsh 收到了可解析的响应，但其中没有它要求的原生搜索结果块。dsh 发送的是
+`web_search_20250305` 服务端工具，并且只从 `web_search_tool_result` 中读取来源：
+普通 `text`（即使包含链接）或普通函数调用 `tool_use` 都不能替代它。一个内容为空的
+`web_search_tool_result` 也能通过解析，所以这条错误并不是“没有搜到网页”。
+
+按下面顺序排查：
+
+1. 在 **dsh 自己的界面**打开报错所指的 **Plugins → Built-in plugin settings → Web search**，
+   核对 **Messages API base URL**，并在修改后保存。新版页面可能叫 **Web search and fetch**，
+   Messages 搜索对应 **DeepSeek (legacy)**。搜索模型从实际部署配置或下述请求事件中核对；
+   部分版本的设置页不提供模型编辑字段。报错里的
+   `http://127.0.0.1:3425/v1/messages` 是当次实际请求的地址；基址字段由 dsh
+   自动追加 `/messages`，不要把完整的请求地址再填进去。
+2. 如果搜索也要经过本机 Magpie，需要核对搜索模型的完整 ID，以及 **Magpie 自己的**
+   **Settings → Models → Web search**。Magpie 可以转发上游的原生搜索，也可以用其他
+   已配置的来源代搜，再编码成 `web_search_tool_result`；因此不要求聊天模型本身
+   一定能搜索。聊天测试通过、模型支持普通工具调用、或改成完整模型 ID，都不能
+   单独证明搜索可用。在 Magpie 的 **Routing** 页确认搜索实际走了哪个来源。
+3. 如果决定让搜索使用其他端点，请由你选择信任且支持该搜索协议的端点，并配置该
+   端点接受的凭据。不要把 ZenMux 的订阅 Key 当作 DeepSeek 直连凭据。若设置页不可用，
+   对应的部署配置项是 `web-search-deepseek.baseURL`；环境变量回退项是
+   `DEEPSEEK_SEARCH_BASE_URL`，已有显式 `baseURL` 时环境变量不会覆盖它。
+
+**为什么接入 ChatGPT Plus 时搜索能用？** Magpie 对 ChatGPT/Codex 账号有专门的搜索
+适配：可以使用 ChatGPT 后端搜索，也可以让该账号替其他模型代搜。若 Plus 是通过
+Magpie 接入，这就能解释它与单独接入 ZenMux 时的差别；实际来源仍以 Routing 为准。
+可以保留已登录且启用的 ChatGPT/Codex 账号，在 Magpie 的 Web search 页面将它选为
+**Searches for other models**，同时继续使用 ZenMux 的聊天模型。仅切换聊天模型，
+不会自动证明 ZenMux 那条上游也能执行同样的搜索。
+
+Magpie 上游 [issue #2726](https://github.com/yetone/magpie/issues/2726) 还记录过相同
+错误：某些版本会把 dsh 搜索指向网关，即使网关没有可用搜索来源；返回普通文本后
+dsh 就会报缺少结果块。不要仅凭错误里的地址认定是用户填错了配置，需要结合实际
+版本、搜索来源和请求日志判断。
+
+进一步定位时，提供 dsh 版本、搜索基址、搜索模型，以及搜索响应中 `content[].type`
+的列表即可；不要贴 API Key、Authorization 请求头或完整凭据文件。dsh 的
+`web/deepseek-search-llm-request` 会话事件记录实际搜索端点和请求体，可用于核对请求
+是否符合预期，但它不是上游响应日志。
+
+参考：dsh 官方
+[搜索提供方说明](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/web/web-search-deepseek/README.md)
+和
+[请求与响应解析实现](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/web/web-search-deepseek/src/provider.ts)，
+以及 [Magpie 搜索说明](https://usemagpie.ai/docs/web-search)。
+
 ## 说明
 
 - 插件在服务器上用 magpie v0.1.3913 + 隔离沙箱（独立 `HOME`）+ 本地 mock 验证过；Windows 走同一份纯 JS 代码，没有平台差异。

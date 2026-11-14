@@ -13,3 +13,6 @@ Thumbs.db
 .tk/
 .smoke/
 .sandbox*/
+.dev/
+.mock-provider-log.json
+docs/research/.mock-provider-log.json

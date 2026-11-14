@@ -366,7 +366,9 @@ export function modelRow(m, base = {}, { subscription = false, api, dev } = {}) 
     reasoning,
     tool_call: !!toolcall,
     modalities,
-    ...(api && !isObj(b?.api) ? { api } : {}),
+    // Our routing wins over models.dev's own api entry: the protocol this model
+    // is asked on (and so the base it is asked at) is what this plugin decides.
+    ...(api ? { api } : {}),
     ...(!b?.release_date && typeof m.publish_time === "string" && m.publish_time
       ? { release_date: m.publish_time }
       : {}),
@@ -382,6 +384,90 @@ export function modelRow(m, base = {}, { subscription = false, api, dev } = {}) 
     ...(variants ? { variants } : {}),
     ...(cost ? { cost } : {}),
   }
+}
+
+// Which API a model is asked on. ZenMux's rich catalogue
+// (/api/frontend/model/available/list) lists each model's `suitable_api`, and
+// its own OpenCode plugin picks in this order — Anthropic Messages first,
+// because that is the only protocol that carries cache_control breakpoints, so
+// prompt caching actually works; then OpenAI Responses for the models that
+// want its reasoning summaries and conversation state; chat completions last,
+// which is the only protocol every model speaks.
+export const PROTOCOLS = Object.freeze(["messages", "responses", "chat"])
+
+const PROTOCOL_ALIASES = new Map([
+  ["anthropic", "messages"],
+  ["anthropic-messages", "messages"],
+  ["messages", "messages"],
+  ["openai-responses", "responses"],
+  ["responses", "responses"],
+  ["chat", "chat"],
+  ["chat.completions", "chat"],
+  ["chat-completions", "chat"],
+  ["openai-completions", "chat"],
+])
+
+// toApi is what magpie needs per model: the AI SDK package decides the protocol
+// (and so the path after the base), the url is where that protocol lives.
+export const AI_SDK = Object.freeze({
+  messages: "@ai-sdk/anthropic",
+  responses: "@ai-sdk/openai",
+  chat: "@ai-sdk/openai-compatible",
+})
+
+export function apiFor(protocol, { chatApi, anthropicApi }) {
+  if (protocol === "messages") return { url: anthropicApi, npm: AI_SDK.messages }
+  if (protocol === "responses") return { url: chatApi, npm: AI_SDK.responses }
+  return { url: chatApi, npm: AI_SDK.chat }
+}
+
+// collectProtocols gathers every place ZenMux names a protocol for a model:
+// the rich catalogue entry spells it `suitable_api`, and its endpoints may each
+// carry their own api/adapters.
+export function collectProtocols(entry) {
+  const out = new Set()
+  const add = (v) => {
+    if (Array.isArray(v)) {
+      for (const x of v) add(x)
+      return
+    }
+    if (typeof v !== "string") return
+    for (const part of v.split(",")) {
+      const key = PROTOCOL_ALIASES.get(part.trim().toLowerCase())
+      if (key) out.add(key)
+    }
+  }
+  if (!isObj(entry)) return out
+  add(entry.suitable_api)
+  add(entry.api)
+  add(entry.protocols)
+  add(entry.supported_endpoint_types)
+  add(entry.capabilities?.protocols)
+  for (const ep of Array.isArray(entry.endpoints) ? entry.endpoints : []) {
+    add(ep?.suitable_api)
+    add(ep?.api)
+    for (const adapter of Array.isArray(ep?.adapters) ? ep.adapters : []) add(adapter?.api)
+  }
+  return out
+}
+
+// resolveProtocol picks one protocol the model speaks, best first. No list (a
+// model the catalogue does not name) means chat, which every model has.
+export function resolveProtocol(entry) {
+  const supported = collectProtocols(entry)
+  for (const protocol of PROTOCOLS) if (supported.has(protocol)) return protocol
+  return "chat"
+}
+
+// protocolMap collapses the rich catalogue into model slug → protocol.
+export function protocolMap(entries) {
+  const out = new Map()
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const slug = entry?.slug ?? entry?.model_slug
+    if (typeof slug !== "string" || !slug) continue
+    out.set(slug, resolveProtocol(entry))
+  }
+  return out
 }
 
 // costOf turns GET /api/v1/models' pricings into magpie's per-million-token
