@@ -91,24 +91,25 @@ function joinPath(...parts) {
 
 const text = (value) => (typeof value === "string" ? value.trim() : "")
 
-// modelsDevCachePaths are the places magpie may keep its models.dev snapshot,
-// in the order magpie itself would look: Go's os.UserCacheDir for the running
-// platform, then models.json in magpie's folder there. magpie leaves a link at
-// the old place when its data is moved, so the default places keep working.
+// modelsDevCachePaths are the places magpie may keep its models.dev snapshot.
+// magpie keeps its cache in ~/.cache/magpie on every platform, Windows and
+// macOS included (its `sync` command names the file), unless XDG_CACHE_HOME
+// points elsewhere; the platform's own cache folder is checked too, for a
+// build that follows Go's os.UserCacheDir. magpie leaves a link at the old
+// place when its data is moved, so the default places keep working.
 export function modelsDevCachePaths(env = process.env, platform = process.platform, home = homedir()) {
   const candidates = []
   const cache = (dir) => {
     const base = text(dir)
     if (base) candidates.push(joinPath(base, "magpie", "models.json"))
   }
+  cache(text(env?.XDG_CACHE_HOME))
+  if (text(home)) cache(joinPath(text(home), ".cache"))
   if (platform === "win32") {
     cache(text(env?.LOCALAPPDATA))
     if (text(home)) cache(joinPath(text(home), "AppData", "Local"))
   } else if (platform === "darwin") {
     if (text(home)) cache(joinPath(text(home), "Library", "Caches"))
-  } else {
-    cache(text(env?.XDG_CACHE_HOME))
-    if (text(home)) cache(joinPath(text(home), ".cache"))
   }
   // Windows spells the same place C:\… or C:/…; one candidate is enough.
   return [...new Set(candidates.map((path) => path.replace(/\\/g, "/")))]

@@ -533,18 +533,27 @@ test("modelRow keeps the config's own variants over models.dev's", () => {
   assert.deepEqual(row.variants, { low: {} })
 })
 
-test("modelsDevCachePaths follows Go's user cache dir per platform", () => {
+test("modelsDevCachePaths finds magpie's models.dev snapshot", () => {
+  // magpie's cache is ~/.cache/magpie on every platform (its sync says so)
   assert.deepEqual(modelsDevCachePaths({ XDG_CACHE_HOME: "/x/cache" }, "linux", "/home/u"), [
     "/x/cache/magpie/models.json",
     "/home/u/.cache/magpie/models.json",
   ])
   assert.deepEqual(modelsDevCachePaths({}, "linux", "/home/u"), ["/home/u/.cache/magpie/models.json"])
-  assert.deepEqual(modelsDevCachePaths({}, "darwin", "/Users/u"), ["/Users/u/Library/Caches/magpie/models.json"])
+  // Windows keeps it under the user profile; %LocalAppData% is a fallback
+  assert.deepEqual(modelsDevCachePaths({}, "win32", "C:\\Users\\u"), [
+    "C:/Users/u/.cache/magpie/models.json",
+    "C:/Users/u/AppData/Local/magpie/models.json",
+  ])
   assert.deepEqual(
     modelsDevCachePaths({ LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local" }, "win32", "C:\\Users\\u"),
-    ["C:/Users/u/AppData/Local/magpie/models.json"],
+    ["C:/Users/u/.cache/magpie/models.json", "C:/Users/u/AppData/Local/magpie/models.json"],
   )
-  assert.deepEqual(modelsDevCachePaths({}, "win32", "C:\\Users\\u"), ["C:/Users/u/AppData/Local/magpie/models.json"])
+  // macOS: magpie's cache first, then Go's own cache folder
+  assert.deepEqual(modelsDevCachePaths({}, "darwin", "/Users/u"), [
+    "/Users/u/.cache/magpie/models.json",
+    "/Users/u/Library/Caches/magpie/models.json",
+  ])
 })
 
 test("modelsDevModels reads magpie's models.dev snapshot", async () => {

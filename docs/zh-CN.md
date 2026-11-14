@@ -52,8 +52,9 @@ magpie 的 Models 页和 agent 的模型选择器里，模型元数据以 **mode
   models.dev 没说的字段。
 - models.dev 没收录的模型（ZenMux 实时目录里另外约 100 个）：用实时目录，推理档位退回插件的
   三档兜底 low / medium / high。
-- 推理档位读的是 magpie 自己的 models.dev 快照（Linux `~/.cache/magpie/models.json`，
-  macOS `~/Library/Caches/…`，Windows `%LocalAppData%\magpie\models.json`），**只读**：
+- 推理档位读的是 magpie 自己的 models.dev 快照（就是 `magpie sync` 打印的那个文件：
+  各平台默认都是 `~/.cache/magpie/models.json`，Windows 的 `C:\Users\<你>\.cache\magpie\models.json`
+  也是这个位置；另外还会查 `$XDG_CACHE_HOME`、macOS `~/Library/Caches`、Windows `%LocalAppData%`），**只读**：
   不额外下载，也不往外发任何东西；快照不存在、读不了，或早于 models.dev 的档位字段时，
   退回实时目录 + 三档兜底。
 
