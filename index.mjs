@@ -57,9 +57,13 @@ const DEFAULT_MODELS = {
 }
 
 async function fetchModels(key, { signal } = {}) {
+  // The catalogue answers 200 to anyone, signed in or not, so a missing key is
+  // not a reason to skip it.
+  const headers = { accept: "application/json" }
+  if (key) headers.authorization = `Bearer ${key}`
   const res = await fetch(`${API}/models`, {
     method: "GET",
-    headers: { authorization: `Bearer ${key}`, accept: "application/json" },
+    headers,
     ...(signal ? { signal } : {}),
   })
   if (!res.ok) {
@@ -575,8 +579,10 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
       id: PROVIDER,
       async models(provider, { auth } = {}) {
         const base = isObj(provider?.models) ? provider.models : DEFAULT_MODELS
+        // Signed out this still works: the catalogue is public, and magpie's
+        // bundled models.dev list is smaller than ZenMux's (it has no qwen3.8,
+        // for one). Without a key there is no plan to filter by.
         const key = keyOf(auth)
-        if (!key) return base
 
         let live
         try {
@@ -597,7 +603,7 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
         // Only the models this account's plan serves, when we can tell which
         // plan that is: ZenMux answers 403 for a model outside it.
         let served = null
-        if (!allModels) {
+        if (key && !allModels) {
           const planKey = await planKeyFor(auth, options)
           if (planKey) {
             try {

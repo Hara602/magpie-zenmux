@@ -150,6 +150,28 @@ For a plugin installed as `github:Hara602/magpie-zenmux` the folder is `magpie-z
 The non-chat models can be listed, but a *chat* request to one of them fails — ZenMux
 refuses it, not the plugin. Turn the switch off when you only chat.
 
+### A model that does not show up (e.g. `qwen/qwen3.8-max-0902`)
+
+1. **Not signed in**: the list then came from magpie's bundled models.dev entry, 110 models,
+   and it has **no qwen3.8 at all** (`qwen3.8-max-0902` is absent there). Since 0.1.5 the
+   public ZenMux catalogue is read even before signing in (219 models), so this is gone.
+2. **Not in your plan**: `qwen/qwen3.8-max-0902` is served by Starter, Pro, Max and Ultra —
+   not by Free.
+3. **The plan's model list moved**: ZenMux rotates them; the View dialog on
+   <https://zenmux.ai/pricing/subscription> is authoritative.
+
+Checking:
+
+```powershell
+magpie plugin --json        # signedIn, and how many models
+magpie models | Select-String qwen
+magpie provider test zenmux qwen/qwen3.8-max-0902
+```
+
+An agent names it `zenmux/qwen/qwen3.8-max-0902` (the model id itself has a slash). Its
+`suitable_api` is `chat.completions` only, so the Responses and Anthropic native endpoints
+do not serve it — magpie translates to chat, which is what agents use.
+
 ## Why the picker shows fewer models than zenmux.ai
 
 zenmux.ai lists **219** models; the site's own count of "200+" comes from
@@ -161,7 +183,7 @@ those 219 models). magpie has to show models an agent can actually call, so:
 | ZenMux catalogue (`/api/v1/models`) | 219 | everything ZenMux serves |
 | → chat models only | **170** | drops 49 that output images (14), video (14), speech (6), transcriptions (6), embeddings (4), decisions (3) and reranks (2) — an agent's model picker can only chat |
 | → your plan's models | **218** (default) | the whole plan: 170 chat + 48 non-chat (169 when only chat models are shown; `inclusionai/ring-2.6-1t` is in no plan) |
-| before signing in | 102 | magpie's bundled models.dev entry for `zenmux`, which is smaller than ZenMux's live list |
+| before signing in | 219 | since 0.1.5 the public catalogue is read anyway (it used to be models.dev's 102, which lacks qwen3.8) |
 
 Non-chat models are listed by default so the plan is fully visible; a *chat* request to one
 of them fails at ZenMux. `includeNonChat: false` hides them.

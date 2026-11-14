@@ -123,6 +123,26 @@ magpie plugin options magpie-plugin off                           # 回到默认
 非聊天模型（图片/视频/语音/向量）能在列表里看到，但**用聊天接口调用它们会失败**，这是
 ZenMux 端的限制，不是插件的问题；所以只想聊天时可以关掉开关让列表干净一些。
 
+### 为什么有的模型（例如 `qwen/qwen3.8-max-0902`）看不到
+
+1. **没登录成功**：未登录时列表来自 magpie 内置的 models.dev，只有 110 个模型，
+   而且**完全没有 qwen3.8 系列**（实测：models.dev 的 zenmux 条目里 `qwen3.8-max-0902` 不存在）。
+   0.1.5 起，未登录也会去读 ZenMux 的公开目录（219 个），这种情况已经不会再发生。
+2. **套餐不含**：`qwen/qwen3.8-max-0902` 在 Starter / Pro / Max / Ultra 里有，**Free 档没有**。
+3. **登录成功但套餐列表变了**：计划里的模型会轮换，以 `zenmux.ai/pricing/subscription` 的 View 为准。
+
+自查：
+
+```powershell
+magpie plugin --json                 # signedIn 是否 true，模型数是多少
+magpie models | Select-String qwen   # 列表里有没有
+magpie provider test zenmux qwen/qwen3.8-max-0902   # 直接打一次
+```
+
+agent 里要写全：`zenmux/qwen/qwen3.8-max-0902`（模型 id 本身带一个 `/`）。
+该模型的 `suitable_api` 只有 `chat.completions`，所以走 Responses / Anthropic 原生端点不适用，
+但 magpie 会自动翻译成 chat，正常使用不受影响。
+
 ## 为什么比 zenmux.ai 上少
 
 zenmux.ai 上显示 **219** 个模型；站内"200+"的列表来自
@@ -134,7 +154,7 @@ magpie 里要放的是 agent 真能调用的模型，所以会逐层收窄：
 | ZenMux 目录（`/api/v1/models`） | 219 | ZenMux 提供的全部 |
 | → 只留聊天模型 | **170** | 去掉 49 个：输出图片 14、视频 14、语音 6、语音转写 6、向量 4、决策 3、rerank 2 —— agent 的模型选择器只能聊天 |
 | → 你套餐包含的 | **218**（默认） | 套餐全量：170 聊天 + 48 非聊天；只列聊天时是 **169**（1 个聊天模型 `inclusionai/ring-2.6-1t` 不在任何 Builder Plan 里） |
-| 未登录时 | 102 | magpie 内置的 models.dev `zenmux` 条目，比 ZenMux 实时列表小 |
+| 未登录时 | 219 | 0.1.5 起也读 ZenMux 的公开目录（之前是 models.dev 的 102 个，缺 qwen3.8 等） |
 
 非聊天模型是**故意**不列的：在聊天 agent 里选了视频模型，第一个请求就会失败。
 想全部列出来（例如给走 `/v1/images/generations` 的用法），设 `options.includeNonChat: true`。
