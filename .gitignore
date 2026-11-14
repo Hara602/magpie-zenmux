@@ -7,3 +7,9 @@ dist/
 Thumbs.db
 *.zip.sha256
 .git-known-hosts
+
+# local magpie sandboxes used while testing (never commit these)
+.tc/
+.tk/
+.smoke/
+.sandbox*/

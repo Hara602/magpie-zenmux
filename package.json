@@ -1,6 +1,6 @@
 {
   "name": "opencode-zenmux-auth",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "OpenCode / magpie provider plugin: ZenMux Builder Plan — sign in with a subscription API key and a Management API key, chat through ZenMux, and show the plan's rolling 5-hour / 7-day Flows",
   "type": "module",
   "main": "./index.mjs",

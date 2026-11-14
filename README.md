@@ -124,6 +124,32 @@ likelihood:
 
 `sk-payg-…` (pay-as-you-go) keys work too — they spend credits instead of Flows.
 
+## Seeing every model in your plan
+
+Since 0.1.4 the picker lists **every model your plan serves**, not only chat models:
+
+```
+default (whole plan): 218  (170 chat + 48 image / video / speech / embedding)
+chat models only    : 169
+ignore the plan     : 219  (every chat model ZenMux has, plus the non-chat ones)
+```
+
+Two switches, in Plugins → Installed → Options (*Show every model the plan serves*,
+on by default; *Ignore the plan filter*, off), or from a terminal — note the name is the
+**plugin folder's**, not the provider id:
+
+```powershell
+magpie plugin options magpie-plugin '{"includeNonChat": false}'   # chat models only
+magpie plugin options magpie-plugin '{"allModels": true}'         # ignore the plan
+magpie plugin options magpie-plugin off                           # back to defaults
+```
+
+For a plugin installed as `github:Hara602/magpie-zenmux` the folder is `magpie-zenmux`.
+`magpie plugin options zenmux …` answers `no plugin "zenmux"`: `zenmux` is the provider id.
+
+The non-chat models can be listed, but a *chat* request to one of them fails — ZenMux
+refuses it, not the plugin. Turn the switch off when you only chat.
+
 ## Why the picker shows fewer models than zenmux.ai
 
 zenmux.ai lists **219** models; the site's own count of "200+" comes from
@@ -134,12 +160,11 @@ those 219 models). magpie has to show models an agent can actually call, so:
 | --- | --- | --- |
 | ZenMux catalogue (`/api/v1/models`) | 219 | everything ZenMux serves |
 | → chat models only | **170** | drops 49 that output images (14), video (14), speech (6), transcriptions (6), embeddings (4), decisions (3) and reranks (2) — an agent's model picker can only chat |
-| → your plan's models | **169** | 1 chat model (`inclusionai/ring-2.6-1t`) is in no Builder Plan; the rest are filtered per tier |
+| → your plan's models | **218** (default) | the whole plan: 170 chat + 48 non-chat (169 when only chat models are shown; `inclusionai/ring-2.6-1t` is in no plan) |
 | before signing in | 102 | magpie's bundled models.dev entry for `zenmux`, which is smaller than ZenMux's live list |
 
-Non-chat models are hidden on purpose: picking a video model in a chat agent fails on the
-first request. `options.includeNonChat` lists everything the plan serves instead (for
-providers used through `/v1/images/generations` and the like).
+Non-chat models are listed by default so the plan is fully visible; a *chat* request to one
+of them fails at ZenMux. `includeNonChat: false` hides them.
 
 ## Options
 

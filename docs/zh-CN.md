@@ -93,6 +93,36 @@ App 里的操作路径：**Plugins → Add a plugin** 指向文件夹 → 在 pr
 额度出现在 Providers 卡片和 `magpie quota`。agent 里模型名是 `zenmux/<vendor>/<model>`，
 例如 `zenmux/deepseek/deepseek-v4.1-flash`、`zenmux/openai/gpt-6.1-terra`。
 
+## 看到套餐里的全部模型（0.1.4 起的默认行为）
+
+登录后默认列出**你套餐里的全部模型**，不只是聊天模型：
+
+```
+默认（套餐全量）: 218 个（170 聊天 + 48 图片/视频/语音/向量）
+只要聊天模型    : 169 个
+忽略套餐过滤    : 219 个（ZenMux 全部聊天模型 + 非聊天）
+```
+
+开关有两处，改完重启宿主（`magpie plugin off <插件名> ; magpie plugin on <插件名>`）：
+
+1. **App 里**：Plugins → Installed → 该插件 → Options，两个开关：
+   - *Show every model the plan serves*（默认开）——关掉就只列聊天模型；
+   - *Ignore the plan filter*（默认关）——打开就列 ZenMux 全部模型，不管套餐。
+2. **命令行**（注意名字是**插件目录名**，不是 provider id）：
+
+```powershell
+magpie plugin options magpie-plugin '{"includeNonChat": false}'   # 只留聊天模型
+magpie plugin options magpie-plugin '{"allModels": true}'         # 忽略套餐过滤
+magpie plugin options magpie-plugin off                           # 回到默认
+```
+
+> 从 GitHub 装的目录名是 `magpie-zenmux`；如果 `magpie plugin` 里显示的名字不同，就用它。
+> 写成 `magpie plugin options zenmux …` 会报 `no plugin "zenmux"` —— `zenmux` 是 provider id，
+> 不是插件名。
+
+非聊天模型（图片/视频/语音/向量）能在列表里看到，但**用聊天接口调用它们会失败**，这是
+ZenMux 端的限制，不是插件的问题；所以只想聊天时可以关掉开关让列表干净一些。
+
 ## 为什么比 zenmux.ai 上少
 
 zenmux.ai 上显示 **219** 个模型；站内"200+"的列表来自
@@ -103,7 +133,7 @@ magpie 里要放的是 agent 真能调用的模型，所以会逐层收窄：
 | --- | --- | --- |
 | ZenMux 目录（`/api/v1/models`） | 219 | ZenMux 提供的全部 |
 | → 只留聊天模型 | **170** | 去掉 49 个：输出图片 14、视频 14、语音 6、语音转写 6、向量 4、决策 3、rerank 2 —— agent 的模型选择器只能聊天 |
-| → 你套餐包含的 | **169** | 只有 1 个聊天模型（`inclusionai/ring-2.6-1t`）不在任何 Builder Plan 里，其余按档位过滤 |
+| → 你套餐包含的 | **218**（默认） | 套餐全量：170 聊天 + 48 非聊天；只列聊天时是 **169**（1 个聊天模型 `inclusionai/ring-2.6-1t` 不在任何 Builder Plan 里） |
 | 未登录时 | 102 | magpie 内置的 models.dev `zenmux` 条目，比 ZenMux 实时列表小 |
 
 非聊天模型是**故意**不列的：在聊天 agent 里选了视频模型，第一个请求就会失败。

@@ -294,15 +294,80 @@ async function request(key, input, init) {
   return annotate(res)
 }
 
+async function fetchSubscription(managementKey, { signal } = {}) {
+  const res = await fetch(`${MANAGEMENT_API}/subscription/detail`, {
+    method: "GET",
+    headers: { authorization: `Bearer ${managementKey}`, accept: "application/json" },
+    ...(signal ? { signal } : {}),
+  })
+  const text = await res.text().catch(() => "")
+  let body
+  try {
+    body = text ? JSON.parse(text) : undefined
+  } catch {
+    body = undefined
+  }
+  return { status: res.status, ok: res.ok, body, text }
+}
+
+// Plans change rarely; one host asks once every six hours.
+let planCache = { at: 0, sets: null }
+const PLAN_TTL = 6 * 3600_000
+
+// fetchPlanSets reads the public plan catalogue: which models each planKey
+// (free / starter / pro / max / ultra) serves. It needs no key, so it also
+// lets chat-only users curate by `plan` without a Management API key.
+async function fetchPlanSets({ signal } = {}) {
+  const now = Date.now()
+  if (planCache.sets && now - planCache.at < PLAN_TTL) return planCache.sets
+  const res = await fetch(`${PUBLIC_API}/subscription/public/get_all_plans`, {
+    method: "GET",
+    headers: { accept: "application/json" },
+    ...(signal ? { signal } : {}),
+  })
+  const text = await res.text().catch(() => "")
+  if (!res.ok) throw new Error(`ZenMux answered HTTP ${res.status}`)
+  let body
+  try {
+    body = text ? JSON.parse(text) : undefined
+  } catch {
+    throw new Error("ZenMux sent a plan catalogue magpie couldn't read")
+  }
+  const sets = planModelSets(body?.data)
+  if (sets.size) planCache = { at: now, sets }
+  return sets
+}
+
+// planKeyFor says which plan this account is on: an explicit `plan` option
+// wins, else the Management API key's subscription detail.
+async function planKeyFor(auth, options, { signal } = {}) {
+  const forced = typeof options?.plan === "string" ? options.plan.trim().toLowerCase() : ""
+  if (forced) return forced
+  const managementKey = managementKeyOf(auth)
+  if (!managementKey) return ""
+  try {
+    const { status, body } = await fetchSubscription(managementKey, { signal })
+    if (status !== 200 || !isObj(body) || body.success === false) return ""
+    const tier = isObj(body.data?.plan) && typeof body.data.plan.tier === "string" ? body.data.plan.tier : ""
+    return tier.trim().toLowerCase()
+  } catch {
+    return ""
+  }
+}
+
 export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
-  const options = isObj(pluginOptions) ? pluginOptions : isObj(input?.magpie?.options) ? input.magpie.options : {}
+  const options = {
+    ...(isObj(input?.magpie?.options) ? input.magpie.options : {}),
+    ...(isObj(input?.magpie?.option) ? input.magpie.option : {}),
+    ...(isObj(pluginOptions) ? pluginOptions : {}),
+  }
   const include = entries(options?.models ?? options?.include)
   const exclude = entries(options?.exclude ?? options?.notModels)
   const allModels = options?.allModels === true || options?.allModels === "true"
   const probeModelOption = typeof options?.probeModel === "string" ? options.probeModel.trim() : ""
   // Off by default: an agent picks chat models, so a video or embedding model in
   // the picker is a trap. Turn it on to see everything the plan serves.
-  const includeNonChat = options?.includeNonChat === true || options?.includeNonChat === "true"
+  const includeNonChat = options?.includeNonChat === undefined ? true : options.includeNonChat === true || options.includeNonChat === "true"
 
   return {
     // The provider and its default models, before anyone signs in. models.dev
@@ -319,6 +384,26 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
 
     auth: {
       provider: PROVIDER,
+
+      // Switches in the provider's editor (Plugins → Installed → Options), also
+      // settable with `magpie plugin options zenmux '{"includeNonChat":false}'`.
+      options: [
+        {
+          key: "includeNonChat",
+          label: "Show every model the plan serves",
+          description:
+            "Also list the plan's image, video, speech and embedding models. They appear in agent model pickers but a chat request to one of them fails.",
+          default: true,
+          filtersModels: true,
+        },
+        {
+          key: "allModels",
+          label: "Ignore the plan filter",
+          description: "List every chat model ZenMux has, not only the ones your plan serves.",
+          default: false,
+          filtersModels: true,
+        },
+      ],
 
       methods: [
         {
