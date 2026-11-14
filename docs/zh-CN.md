@@ -182,6 +182,30 @@ magpie 里要放的是 agent 真能调用的模型，所以会逐层收窄：
 非聊天模型是**故意**不列的：在聊天 agent 里选了视频模型，第一个请求就会失败。
 想全部列出来（例如给走 `/v1/images/generations` 的用法），设 `options.includeNonChat: true`。
 
+### ZenMux 文档到底怎么说的（我之前错在哪）
+
+据 [Protocol Conversion Compatibility](https://zenmux.ai/docs/api/protocol-conversion.html)：
+
+- **推理/思考在全部协议转换中都保留**——Support Overview 表是 All / All / All / All。
+  不存在「某协议无法承载档位」这回事。
+- **Chat ↔ Responses 的档位是原样透传**（`reasoning_effort` → `reasoning.effort`，
+  文档原话 "Effort is passed through"）。
+- **一旦要转成 Messages，档位会被换算成预算**，而这张映射表只到 high：
+  `low`/`medium`/`high` → 2048/5120/10240。**没有 max / xhigh 这一行**，所以这类档位
+  在这条路上会丢。
+- 文档明说：「`reasoning_effort` 与 `thinking` 是区间映射，不是精确的 token 上限保留；
+  需要精确控制思考预算时，优先用目标协议的原生参数。」
+
+所以插件的规则是：优先走模型**原生**的协议（catalogue 里 `suitable_api` 的第一个，完全不转换），
+并且让会推理的模型避开 Messages（除非它只有这一个协议）。这样 `max` 就以 `max` 发出去，
+而不是被塞进预算里。
+
+对 `deepseek/deepseek-v4.1-flash` 来说就是 **chat completions**，也正是 DeepSeek 自己文档写的
+（`reasoning_effort: low/high/max`）。这条路上没有任何转换，`max` 原样到达。
+
+只有确实落到 Messages 的模型才会用预算：low/medium/high 按 ZenMux 的 2048/5120/10240，
+高于 high 的给 24576 或 32768，并按 Anthropic 的要求收敛到 `max_tokens` 的 80% 以内。
+
 ### 为什么这个模型走的是某个协议（而不是别的）
 
 ZenMux 一个模型会挂在多个 endpoint 上，但**这些 endpoint 并不都接受推理参数**。以

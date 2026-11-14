@@ -41,95 +41,62 @@ export function modelsDevLevels(dev) {
   return levels
 }
 
-// ZenMux's own effort vocabulary, per protocol:
-//   chat.completions: minimal / low / medium / high
-//   responses:        none / minimal / low / medium / high / xhigh
-//   messages:         Anthropic thinking budgets, not effort names
-// magpie only translates low/medium/high for these protocols, so a client
-// asking for its own top level ("max", "ultra", "xhigh") is clamped back to
-// high. Declaring the variants with the vendor's own parameter keeps the top
-// level intact instead of round-tripping it into a budget.
+// Reasoning levels are declared by each model, and the vendor's own names are
+// the ones to send: DeepSeek, for one, documents effort as low / high / max on
+// both its Chat and Responses APIs, so renaming "max" to something magpie
+// happens to know would lose exactly what the user asked for.
+//
+// magpie forwards a variant's reasoningEffort to the right place per protocol
+// (reasoning.effort on Responses, reasoning_effort on chat), so the plugin puts
+// the vendor's level there verbatim and lets the protocol carry it.
 export const PROTOCOL_EFFORTS = Object.freeze({
-  chat: ["minimal", "low", "medium", "high"],
-  responses: ["none", "minimal", "low", "medium", "high", "xhigh"],
+  chat: ["none", "minimal", "low", "medium", "high", "max"],
+  responses: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
 })
 
-// variantsForProtocol builds the variants map a model should declare: each
-// level name is what the client picks, and the value is the exact parameter
-// ZenMux must receive. Levels the protocol cannot express are left out, so a
-// picker never offers something that silently degrades.
 // Anthropic thinking budgets, in tokens, for each level a client may pick. The
 // Messages protocol has no effort names: a budget is the only way to say how
-// hard to think, and ZenMux passes budget_tokens to the model as it is.
+// hard to think. ZenMux's own table (protocol-conversion) maps low/medium/high
+// to 2048/5120/10240 and nothing beyond, so anything above high has to be sent
+// as a budget directly or it is lost.
 export const THINKING_BUDGETS = Object.freeze({
+  none: 0,
   minimal: 1024,
   low: 2048,
-  medium: 8192,
-  high: 16384,
-  xhigh: 32768,
+  medium: 5120,
+  high: 10240,
+  xhigh: 24576,
   max: 32768,
   ultra: 32768,
 })
 
 // budgetForLevel turns a level name into a thinking budget. A name we do not
-// know gets the highest we have rather than nothing: a client that asked for
-// its top level did not ask for adaptive.
+// know gets the highest we have rather than nothing: a client that asked for its
+// top level did not ask for adaptive.
 export function budgetForLevel(level) {
   const l = String(level ?? "").trim().toLowerCase()
-  if (THINKING_BUDGETS[l]) return THINKING_BUDGETS[l]
+  if (THINKING_BUDGETS[l] !== undefined) return THINKING_BUDGETS[l]
   return THINKING_BUDGETS.high
 }
 
-// A client's own top level ("max", "ultra") has no name upstream, and magpie
-// clamps any name it does not know back to high — which is how a "max" pick
-// ended up as "high". Renaming the top level to the vendor's own word keeps the
-// intensity and only changes the label: Responses tops out at xhigh, chat at
-// high (ZenMux's chat completions have no level above it).
-const TOP_LEVEL = Object.freeze({ responses: "xhigh", chat: "high" })
-const CLIENT_TOPS = Object.freeze(["max", "ultra", "xhigh"])
-
-// The Messages protocol has no effort name at all, but magpie always sends its
-// thinking field as {type:"adaptive"} for it, and ZenMux passes an explicit
-// budget straight to the model. So a budget is the only level a Messages model
-// can honour, and it is expressed with the Anthropic-native parameter.
+// variantsForProtocol builds the variants map a model should declare. Every
+// named level is offered with the vendor's own parameter; nothing is renamed
+// and nothing is dropped, because a name the vendor supports but we did not
+// list would show up as "the level I picked did nothing".
 export function variantsForProtocol(protocol, levels) {
-  // Messages has no effort name; magpie only forwards the levels a client can
-  // pick, and our request rewrite turns magpie's collapsed "adaptive" into a
-  // real budget, so the levels named for the model stay as they are.
+  // Messages has no effort name: it takes a thinking budget (or, where the
+  // vendor documents it, output_config.effort), and magpie collapses whatever a
+  // client asks for into thinking:{type:"adaptive"}, which this plugin turns
+  // back into a budget on the way out. So the named levels stay as they are.
   if (protocol === "messages") return undefined
   const allowed = PROTOCOL_EFFORTS[protocol]
-  if (!allowed) return undefined // messages without levels: nothing to say
-  const top = TOP_LEVEL[protocol] ?? allowed[allowed.length - 1]
+  if (!allowed) return undefined
   const wanted = Array.isArray(levels) && levels.length ? levels : allowed
-  // A level the vendor cannot express is dropped rather than offered and
-  // silently degraded; a client's top level becomes the vendor's top.
   const out = {}
-  const seen = new Set()
   for (const level of wanted) {
-    const l = String(level).trim().toLowerCase()
-    const name = l
-    // A client's top level keeps its own name (so a picker still offers "max")
-    // but is sent as the vendor's top level; a vendor level the protocol cannot
-    // express is dropped instead of being offered and silently clamped.
-    const sent = CLIENT_TOPS.includes(l) ? top : l
-    if (!allowed.includes(sent) || seen.has(name)) continue
-    seen.add(name)
-    // Both chat and Responses take reasoning_effort; chat also takes a thinking
-    // budget, which is the finer control and the one ZenMux documents for
-    // subscriptions (see reasoning.html). Send the effort name — it is what
-    // magpie and the vendor agree on.
-    out[name] = { reasoningEffort: sent }
-  }
-  // ZenMux's chat adapters also accept a thinking budget. Offer the top level as
-  // a budget too, so a client that asks for the maximum does not have to rely on
-  // the vendor's own rounding of "high".
-  // The highest level this protocol can express gets an explicit budget too, so
-  // the vendor is told how hard to think instead of inferring it from max_tokens.
-  for (const name of Object.keys(out)) {
-    const budget = THINKING_BUDGETS[name] ?? THINKING_BUDGETS[top]
-    if (out[name].reasoningEffort === top) {
-      out[name] = { reasoningEffort: top, thinking: { type: "enabled", budget_tokens: budget } }
-    }
+    const l = String(level ?? "").trim().toLowerCase()
+    if (!l || out[l]) continue
+    out[l] = { reasoningEffort: l }
   }
   return Object.keys(out).length ? out : undefined
 }
@@ -620,13 +587,26 @@ export function resolveProtocol(entry, { reasoning = false } = {}) {
   const supported = collectProtocols(entry)
   if (!supported.size) return "chat"
 
+  // ZenMux's protocol-conversion doc says reasoning is carried on every
+  // conversion, but it also spells out how: Chat <-> Responses pass the effort
+  // through unchanged, while anything converted to Messages turns it into a
+  // budget whose mapping stops at high (low/medium/high -> 2048/5120/10240).
+  // So a level like "max" survives chat and Responses and is lost on Messages,
+  // and the catalogue's adapter parameter lists (incomplete for Responses) are
+  // not the thing to decide on.
   let pool = supported
   if (reasoning) {
-    const withReasoning = collectReasoningProtocols(entry)
-    const narrowed = new Set([...supported].filter((p) => withReasoning.has(p)))
-    if (narrowed.size) pool = narrowed
+    const withoutMessages = new Set([...supported].filter((p) => p !== "messages"))
+    if (withoutMessages.size) pool = withoutMessages
   }
 
+  // The catalogue puts the vendor's native protocol first; using it means no
+  // conversion at all, which is where "reasoning_effort: max" is passed through
+  // untouched.
+  for (const part of String(entry?.suitable_api ?? "").split(",")) {
+    const key = PROTOCOL_ALIASES.get(part.trim().toLowerCase())
+    if (key && pool.has(key)) return key
+  }
   for (const protocol of ROUTING_ORDER) if (pool.has(protocol)) return protocol
   return "chat"
 }

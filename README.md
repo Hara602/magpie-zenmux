@@ -196,6 +196,35 @@ those 219 models). magpie has to show models an agent can actually call, so:
 Non-chat models are listed by default so the plan is fully visible; a *chat* request to one
 of them fails at ZenMux. `includeNonChat: false` hides them.
 
+### What ZenMux's docs actually say (and where I was wrong)
+
+From [Protocol Conversion Compatibility](https://zenmux.ai/docs/api/protocol-conversion.html):
+
+- **Reasoning / thinking is carried on every conversion** — the Support Overview table reads
+  All / All / All / All. No protocol is "unable" to carry an effort level.
+- **Chat <-> Responses pass the effort through unchanged** (`reasoning_effort` →
+  `reasoning.effort`, "Effort is passed through").
+- **Anything converted to Messages turns the effort into a budget**, and that mapping stops
+  at high: `low` / `medium` / `high` → 2048 / 5120 / 10240. There is no row for `max` or
+  `xhigh`, so such a level is lost on that path.
+- The docs say it plainly: "`reasoning_effort` and `thinking` are range mappings, not exact
+  token-limit preservation. If you need precise thinking budget control, prefer the target
+  protocol's native parameter."
+
+So the rule the plugin follows is: use the protocol the model is **native** on (the
+catalogue's first `suitable_api`, no conversion at all), and keep reasoning models off
+Messages unless that is the only protocol they have. `max` is then sent as `max` — the
+vendor's own name — instead of being squeezed into a budget.
+
+For `deepseek/deepseek-v4.1-flash` that means **chat completions**, which is also what
+DeepSeek's own API documents (`reasoning_effort: low/high/max`). On that path nothing is
+converted, so `max` arrives as `max`.
+
+A model that ends up on Messages still gets a real budget, sized from the level
+(low/medium/high follow ZenMux's 2048/5120/10240, and anything above high gets 24576 or
+32768), capped at 80% of `max_tokens` because Anthropic requires `budget_tokens <
+max_tokens`.
+
 ### Why a model is asked on the protocol it is (and not another)
 
 ZenMux lists a model on several endpoints, and the endpoints do *not* all accept a
