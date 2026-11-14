@@ -196,6 +196,45 @@ those 219 models). magpie has to show models an agent can actually call, so:
 Non-chat models are listed by default so the plan is fully visible; a *chat* request to one
 of them fails at ZenMux. `includeNonChat: false` hides them.
 
+## Reasoning levels (why "max" used to become "high")
+
+magpie only translates the effort names `low` / `medium` / `high` for ZenMux's
+protocols. Anything else a client sends — `max`, `ultra`, a thinking budget — is clamped
+back to `high`, which is how picking **max** ended up as **high**. The plugin now makes
+the top level expressible instead:
+
+| Route | Levels offered | What the vendor receives |
+| --- | --- | --- |
+| Responses | `none` / `minimal` / `low` / `medium` / `high` / **`xhigh`** | `reasoning.effort: "xhigh"` |
+| Chat completions | `minimal` / `low` / `medium` / `high` | `reasoning_effort: "high"` (nothing above exists) |
+| Anthropic Messages | the levels models.dev names | `thinking: {type:"enabled", budget_tokens:N}` |
+
+The level is declared on the model as a variant carrying the vendor's own parameter, so
+magpie forwards it instead of guessing from a budget:
+
+```js
+variants: { low: { reasoningEffort: "low" }, high: { reasoningEffort: "high" },
+            xhigh: { reasoningEffort: "xhigh" } }   // Responses
+```
+
+A client's own top-level names (`max`, `ultra`, `xhigh`) are renamed to the vendor's top
+level rather than offered and then clamped. Chat completions have no level above `high`
+in ZenMux, so `max` collapses onto `high` there — that is the vendor's ceiling, not a bug.
+
+For Anthropic Messages, magpie always sends `thinking: {type:"adaptive"}` and drops the
+budget a client asked for. The plugin turns that back into a real budget:
+
+| Level | `budget_tokens` |
+| --- | --- |
+| low | 2048 |
+| medium | 8192 |
+| high | 16384 |
+| max / xhigh / unknown | 32768 |
+
+It never exceeds `max_tokens * 0.8` (Anthropic's own limit), and a budget the caller
+already set is left alone. `options.effort` (default `high`) picks the budget used when
+the level is not visible any more.
+
 ## Two ways to sign in
 
 | Method | What it needs | Quota |
@@ -266,6 +305,7 @@ plugin is added through the app; a folder entry can also carry `"options"`:
     "includeNonChat": true,        // also list image / video / audio / embedding models
     "protocol": "auto",            // auto | chat | responses | messages
     "store": false,                // Responses: keep the conversation on ZenMux's side
+    "effort": "high",             // Messages: budget when the level is lost (low|medium|high|max)
 } }
 ```
 

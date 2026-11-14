@@ -17,3 +17,10 @@ Thumbs.db
 .mock-provider-log.json
 docs/research/.mock-provider-log.json
 .oauth/
+.eff/
+.vr/
+.fx/
+.fx2/
+.v/
+.v2/
+.chk/

@@ -182,6 +182,42 @@ magpie 里要放的是 agent 真能调用的模型，所以会逐层收窄：
 非聊天模型是**故意**不列的：在聊天 agent 里选了视频模型，第一个请求就会失败。
 想全部列出来（例如给走 `/v1/images/generations` 的用法），设 `options.includeNonChat: true`。
 
+## 推理档位（为什么选 max 会变成 high）
+
+magpie 对 ZenMux 的协议只翻译 `low` / `medium` / `high` 这三个档位名。客户端发别的东西
+（`max`、`ultra`、thinking 预算）都会被夹回 `high`——这就是**选 max 结果变成 high** 的原因。
+插件现在让最高档位真正可表达：
+
+| 路由 | 提供的档位 | ZenMux 实际收到 |
+| --- | --- | --- |
+| Responses | `none` / `minimal` / `low` / `medium` / `high` / **`xhigh`** | `reasoning.effort: "xhigh"` |
+| Chat completions | `minimal` / `low` / `medium` / `high` | `reasoning_effort: "high"`（没有更高的） |
+| Anthropic Messages | models.dev 命名的档位 | `thinking: {type:"enabled", budget_tokens:N}` |
+
+档位以「变体」形式声明在模型上，带着厂商自己的参数，magpie 就不用靠预算反推：
+
+```js
+variants: { low: { reasoningEffort: "low" }, high: { reasoningEffort: "high" },
+            xhigh: { reasoningEffort: "xhigh" } }   // Responses
+```
+
+客户端自己的最高档名（`max`/`ultra`/`xhigh`）会被重命名为厂商的最高档，而不是先提供再被夹。
+Chat completions 在 ZenMux 里本就没有高于 `high` 的档位，所以 `max` 在那边收敛到 `high`——
+这是厂商上限，不是 bug。
+
+Anthropic Messages 下 magpie 总是发 `thinking: {type:"adaptive"}`，把客户端要的预算丢掉。
+插件会把它还原成真实预算：
+
+| 档位 | `budget_tokens` |
+| --- | --- |
+| low | 2048 |
+| medium | 8192 |
+| high | 16384 |
+| max / xhigh / 未知 | 32768 |
+
+且不超过 `max_tokens * 0.8`（Anthropic 自身的限制），调用方已给预算时不动它。
+`options.effort`（默认 `high`）决定档位信息已丢失时用哪一档。
+
 ## 两种登录方式（0.2.0 起）
 
 | 方式 | 需要什么 | 额度 |

@@ -164,6 +164,7 @@ class Handler(BaseHTTPRequestHandler):
                 "anthropic_version": self.headers.get("anthropic-version"),
                 "store": body.get("store") if isinstance(body, dict) else None,
                 "stream_options": body.get("stream_options") if isinstance(body, dict) else None,
+                "body": body,
             })
             json.dump(seen, open(PROVIDER_LOG, "w"), indent=1)
         if u.path != "/api/v1/chat/completions":

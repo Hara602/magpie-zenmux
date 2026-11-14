@@ -39,6 +39,7 @@ import {
   PROVIDER,
   SUBSCRIPTION_KEY_RE,
   bearerOf,
+  budgetForLevel,
   entries,
   isChatModel,
   isOAuth,
@@ -334,10 +335,21 @@ async function annotate(res) {
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers })
 }
 
+// effortLevelOf reads the level a caller asked for, wherever the client put it:
+// reasoning_effort, reasoning.effort, or the body's own "reasoningEffort" that a
+// variant passes along.
+function effortLevelOf(body) {
+  if (!isObj(body)) return undefined
+  for (const v of [body.reasoning_effort, body.reasoning?.effort, body.reasoningEffort]) {
+    if (typeof v === "string" && v.trim()) return v.trim()
+  }
+  return undefined
+}
+
 // request is the account's fetch: it signs every request with the subscription
 // key and asks chat completions for usage on streams, so a streamed turn still
 // reports its tokens.
-async function request(key, input, init, { store = false } = {}) {
+async function request(key, input, init, { store = false, effort } = {}) {
   const headers = new Headers(init?.headers ?? {})
   if (!headers.has("authorization")) headers.set("authorization", `Bearer ${key}`)
   headers.set("accept", headers.get("accept") ?? "application/json")
@@ -378,6 +390,26 @@ async function request(key, input, init, { store = false } = {}) {
       if (/\/responses(?:[?#]|$)/.test(url) && parsed.store !== store) {
         parsed.store = store
         changed = true
+      }
+      // magpie collapses every reasoning level of an Anthropic request into
+      // thinking:{type:"adaptive"}, which throws away how hard the user asked
+      // the model to think. Turn it back into the budget the level stands for,
+      // unless the caller already sent one.
+      if (/\/messages(?:[?#]|$)/.test(url) && isObj(parsed.thinking)) {
+        const t = parsed.thinking
+        const budget = Number(t.budget_tokens)
+        if (!(Number.isFinite(budget) && budget > 0) && (t.type === "adaptive" || t.type === "enabled" || t.type === undefined)) {
+          const level = effortLevelOf(parsed) ?? effort ?? "high"
+          const tokens = budgetForLevel(level)
+          // Anthropic wants the budget below max_tokens, and at least 1024.
+          const max = Number(parsed.max_tokens)
+          const room = Number.isFinite(max) && max > 0 ? Math.max(1024, Math.floor(max * 0.8)) : tokens
+          const use = Math.min(tokens, room)
+          if (use >= 1024) {
+            parsed.thinking = { type: "enabled", budget_tokens: use }
+            changed = true
+          }
+        }
       }
       if (changed) {
         body = JSON.stringify(parsed)
@@ -468,6 +500,11 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
     requested === "chat" || requested === "responses" || requested === "messages" ? requested : "auto"
   // Responses defaults to store:true — the conversation kept on ZenMux's side.
   const storeOption = options?.store === true || options?.store === "true"
+  // Which thinking budget an Anthropic request gets when the client's level is
+  // not visible any more (magpie collapsed it). "high" is the default because
+  // that is what magpie itself infers from a large budget.
+  const effortOption =
+    typeof options?.effort === "string" && options.effort.trim() ? options.effort.trim().toLowerCase() : "high"
   // Off by default: an agent picks chat models, so a video or embedding model in
   // the picker is a trap. Turn it on to see everything the plan serves.
   const includeNonChat = options?.includeNonChat === undefined ? true : options.includeNonChat === true || options.includeNonChat === "true"
@@ -706,7 +743,7 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
           // /api/v1, Messages on /api/anthropic/v1), and a baseURL would win
           // over it.
           apiKey: key,
-          fetch: (input_, init) => request(key, input_, init, { store: storeOption }),
+          fetch: (input_, init) => request(key, input_, init, { store: storeOption, effort: effortOption }),
         }
       },
 
@@ -820,9 +857,10 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
           }
         }
 
+        const protocolOf = (id) =>
+          protocolOption !== "auto" ? protocolOption : protocols?.get(id) ?? "chat"
         const apiOf = (id) => {
-          const protocol =
-            protocolOption !== "auto" ? protocolOption : protocols?.get(id) ?? "chat"
+          const protocol = protocolOf(id)
           return { id, ...apiFor(protocol, { chatApi: API, anthropicApi: ANTHROPIC_API }) }
         }
 
@@ -837,6 +875,7 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
             out[m.id] = modelRow(m, base?.[m.id], {
               subscription,
               api: apiOf(m.id),
+              protocol: protocolOf(m.id),
               dev: dev[m.id],
             })
           }
@@ -859,6 +898,7 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
             models[pattern] = modelRow(one, known, {
               subscription,
               api: apiOf(one.id),
+              protocol: protocolOf(one.id),
               dev: dev[one.id],
             })
           }

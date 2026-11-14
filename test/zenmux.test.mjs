@@ -7,6 +7,8 @@ import { test } from "node:test"
 
 import {
   AI_SDK,
+  THINKING_BUDGETS,
+  budgetForLevel,
   apiFor,
   collectProtocols,
   costOf,
@@ -20,6 +22,7 @@ import {
   planModelSets,
   protocolMap,
   resolveProtocol,
+  variantsForProtocol,
   subscriptionToUsage,
 } from "../zenmux.mjs"
 import { ZenMuxBuilderAuthPlugin, _internal } from "../index.mjs"
@@ -272,6 +275,88 @@ test("modelRow's own api wins over models.dev's (routing regression)", () => {
   })
   assert.equal(routed.api.npm, "@ai-sdk/anthropic")
   assert.equal(routed.api.url, "https://zenmux.ai/api/anthropic/v1")
+})
+
+
+test("variantsForProtocol renames a client's top level to the vendor's", () => {
+  // The reported bug: a client asks for "max", magpie cannot translate that
+  // name and clamps it back to high. Responses has a real top level (xhigh), so
+  // the level is renamed instead of degraded.
+  const resp = variantsForProtocol("responses", ["low", "high", "max"])
+  assert.deepEqual(Object.keys(resp), ["low", "high", "xhigh"])
+  assert.equal(resp.xhigh.reasoningEffort, "xhigh")
+
+  // chat completions have nothing above high, so a "max" collapses onto high and
+  // no level is offered that would be silently clamped.
+  const chat = variantsForProtocol("chat", ["low", "high", "max"])
+  assert.deepEqual(Object.keys(chat), ["low", "high"])
+
+  // Without declared levels, the protocol's own vocabulary is offered.
+  assert.deepEqual(Object.keys(variantsForProtocol("responses")), ["none", "minimal", "low", "medium", "high", "xhigh"])
+  assert.deepEqual(Object.keys(variantsForProtocol("chat")), ["minimal", "low", "medium", "high"])
+
+  // Messages carries budgets, not effort names: the plugin leaves the named
+  // levels alone and turns magpie's collapsed "adaptive" into a real budget
+  // when the request goes out (see the request test below).
+  assert.equal(variantsForProtocol("messages", ["low", "high"]), undefined)
+})
+
+test("budgetForLevel gives every level a real thinking budget", () => {
+  assert.equal(budgetForLevel("low"), 2048)
+  assert.equal(budgetForLevel("high"), 16384)
+  assert.equal(budgetForLevel("max"), 32768)
+  assert.equal(budgetForLevel("max"), THINKING_BUDGETS.max)
+  // an unknown level is not "adaptive": it is the highest budget we have
+  assert.equal(budgetForLevel("ultra"), 32768)
+  assert.equal(budgetForLevel(undefined), 16384)
+})
+
+test("request rewrites magpie's collapsed adaptive thinking into a budget", async () => {
+  const { request } = _internal
+  const calls = []
+  const restore = stubFetch((url, init) => {
+    calls.push({ url, body: JSON.parse(init.body) })
+    return { status: 200, text: "{}" }
+  })
+  const url = "https://zenmux.ai/api/anthropic/v1/messages"
+  try {
+    await request(
+      "tok",
+      url,
+      { method: "POST", body: JSON.stringify({ model: "m", max_tokens: 20480, messages: [], thinking: { type: "adaptive" } }) },
+      { effort: "max" },
+    )
+    assert.deepEqual(calls[0].body.thinking, { type: "enabled", budget_tokens: 16384 })
+
+    // a level the caller did send wins over the option
+    await request(
+      "tok",
+      url,
+      { method: "POST", body: JSON.stringify({ model: "m", max_tokens: 20480, messages: [], reasoning_effort: "low", thinking: { type: "adaptive" } }) },
+      {},
+    )
+    assert.deepEqual(calls[1].body.thinking, { type: "enabled", budget_tokens: 2048 })
+
+    // a budget the caller already set is left alone
+    await request(
+      "tok",
+      url,
+      { method: "POST", body: JSON.stringify({ model: "m", max_tokens: 20480, messages: [], thinking: { type: "enabled", budget_tokens: 4096 } }) },
+      {},
+    )
+    assert.equal(calls[2].body.thinking.budget_tokens, 4096)
+
+    // never more than max_tokens can hold
+    await request(
+      "tok",
+      url,
+      { method: "POST", body: JSON.stringify({ model: "m", max_tokens: 1200, messages: [], thinking: { type: "adaptive" } }) },
+      { effort: "max" },
+    )
+    assert.equal(calls[3].body.thinking.budget_tokens, 1024)
+  } finally {
+    restore()
+  }
 })
 
 test("probeCandidates prefers mainstream models, then cheap ones", () => {
@@ -690,7 +775,8 @@ test("models hook aligns every row with models.dev", async () => {
     )
     const known = rows[LIVE_DEEPSEEK.id]
     assert.ok(known)
-    assert.deepEqual(Object.keys(known.variants), ["low", "high", "max"])
+    // chat completions top out at high, so a client's "max" is renamed, not offered as a level that would be clamped
+    assert.deepEqual(Object.keys(known.variants), ["low", "high"])
     assert.equal(known.name, "DeepSeek V4.1 Flash")
     assert.equal(known.limit.output, 384000)
 
@@ -698,7 +784,8 @@ test("models hook aligns every row with models.dev", async () => {
     const unknown = rows["new/model"]
     assert.ok(unknown)
     assert.equal(unknown.name, "New Model")
-    assert.deepEqual(Object.keys(unknown.variants), ["low", "medium", "high"])
+    // chat-routed, so the levels are the ones chat completions can be sent
+    assert.deepEqual(Object.keys(unknown.variants), ["minimal", "low", "medium", "high"])
   } finally {
     restore()
     if (saved.HOME === undefined) delete process.env.HOME
