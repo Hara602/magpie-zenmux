@@ -84,8 +84,14 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/v1/management/subscription/detail":
             return self._json(200, SUBSCRIPTION)
         if u.path == "/api/v1/management/generation":
-            return self._json(404, {"success": False, "message": "generation not found", "data": None})
+            # Real ZenMux answers 403 to a subscription key on management
+            # endpoints; the plugin must fall back to a chat probe.
+            return self._json(403, {"success": False, "message": "Invalid API key", "data": None})
         return self._json(404, {"success": False, "message": "no such route: " + u.path})
+
+    def _key(self):
+        h = self.headers.get("authorization") or ""
+        return h[7:].strip() if h.lower().startswith("bearer ") else ""
 
     def do_POST(self):
         u = urlparse(self.path)
@@ -97,6 +103,13 @@ class Handler(BaseHTTPRequestHandler):
             body = {}
         if u.path != "/api/v1/chat/completions":
             return self._json(404, {"error": {"message": "no such route: " + u.path}})
+        # A stand-in for ZenMux's key check: sk-subs-… / sk-payg-… work.
+        if not self._key().startswith(("sk-subs-", "sk-payg-")):
+            return self._json(
+                403,
+                {"error": {"code": "403", "type": "access_denied",
+                           "message": "You have no permission to access this resource (api_key_source: subscription)"}},
+            )
         model = body.get("model") or "deepseek/deepseek-v4.1-flash"
         if body.get("stream"):
             return self._sse(

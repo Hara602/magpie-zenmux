@@ -186,6 +186,22 @@ test("entries accepts arrays, strings and objects", () => {
   assert.deepEqual(entries(null), [])
 })
 
+test("probeModel picks a cheap chat model, and one the plan serves", () => {
+  const { probeModel } = _internal
+  const models = [
+    { id: "openai/gpt-6.1-terra", context_length: 1050000, output_modalities: ["text"] },
+    { id: "anthropic/claude-fable-5.2", context_length: 200000, output_modalities: ["text"] },
+    { id: "deepseek/deepseek-v4-flash", context_length: 1000000, output_modalities: ["text"] },
+    { id: "openai/gpt-image-2.6-flare", context_length: 32000, output_modalities: ["image"] },
+  ]
+  assert.equal(probeModel(models), "deepseek/deepseek-v4-flash")
+
+  // A plan that only serves the big Anthropic model: the probe follows the plan.
+  const served = new Set(["anthropic/claude-fable-5.2"])
+  assert.equal(probeModel(models, served), "anthropic/claude-fable-5.2")
+  assert.equal(probeModel([], served), "")
+})
+
 test("isKeyRefusal marks a dead key but not a model outside the plan", () => {
   const { isKeyRefusal } = _internal
   assert.equal(

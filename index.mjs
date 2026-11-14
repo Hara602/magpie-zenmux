@@ -82,19 +82,108 @@ function messageOf(text) {
   return String(text ?? "").trim().slice(0, 200)
 }
 
-// checkSubscriptionKey proves a subscription key is live. GET /models answers
-// 200 for any key (it is public), so the check goes through a management
-// endpoint that a subscription key may read metering from: an unknown
-// generation id is fine (400/404/200), a refused key is 401/403.
-async function checkSubscriptionKey(key, { signal } = {}) {
-  const res = await fetch(`${MANAGEMENT_API}/generation?id=gen_magpie_signin_check`, {
-    method: "GET",
-    headers: { authorization: `Bearer ${key}`, accept: "application/json" },
+// The cheap, no-quota checks all lie about a key: GET /api/v1/models,
+// /api/anthropic/v1/models and /api/vertex-ai/v1beta/models answer 200 for any
+// key at all, and every /api/v1/management/* endpoint answers 403 to a valid
+// subscription key too (it wants a Management API key). So a subscription key
+// is proved the only way ZenMux lets us: a one-token chat request, which is
+// exactly the thing the key is for.
+const PROBE_RE = /(^|[/_.-])(flash|lite|mini|haiku|small|turbo|air)([/_.-]|$)/i
+
+// probeModel picks the cheapest-looking chat model, preferring one the plan
+// actually serves when a plan list is at hand.
+function probeModel(models, served) {
+  const chat = models.filter((m) => isChatModel(m))
+  const pool = served ? chat.filter((m) => served.has(m.id)) : chat
+  const use = pool.length ? pool : chat
+  const scored = use
+    .map((m) => {
+      const id = m.id
+      let score = 5
+      if (PROBE_RE.test(id)) score = 1
+      else if (/(pro|max|opus|ultra|thinking)/i.test(id)) score = 9
+      else if (/(flash|lite|mini|haiku)/i.test(id)) score = 2
+      const context = Number(m.context_length) || 0
+      return { id, score, context }
+    })
+    .sort((a, b) => a.score - b.score || a.context - b.context)
+  return scored.length ? scored[0].id : ""
+}
+
+// chatProbe makes one minimal request. A 200 proves the key; 429/402 say the
+// key is fine but the allowance is spent; 403 naming a model means that model
+// is outside the plan, so the caller can try another.
+async function chatProbe(key, model, { signal } = {}) {
+  const res = await fetch(`${API}/chat/completions`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${key}`,
+      "content-type": "application/json",
+      accept: "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: "hi" }],
+      max_tokens: 1,
+      stream: false,
+    }),
     ...(signal ? { signal } : {}),
   })
   const text = await res.text().catch(() => "")
   await res.body?.cancel().catch(() => {})
-  return { status: res.status, ok: res.ok, text }
+  return { status: res.status, ok: res.ok, text, message: messageOf(text) }
+}
+
+// validateSubscriptionKey proves a subscription key is live without failing on
+// the endpoints that answer 403 to it by design.
+async function validateSubscriptionKey(key, { signal, served, models } = {}) {
+  // Fast path: an unknown generation id is 404 and a wrong key 403, but never
+  // trust a 403 here — that is also what a good subscription key gets.
+  try {
+    const res = await fetch(`${MANAGEMENT_API}/generation?id=gen_magpie_signin_check`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${key}`, accept: "application/json" },
+      ...(signal ? { signal } : {}),
+    })
+    const text = await res.text().catch(() => "")
+    await res.body?.cancel().catch(() => {})
+    if (res.status === 200 || res.status === 404 || res.status === 400) {
+      return { ok: true, via: "metering" }
+    }
+  } catch {
+    // Fall through to the chat probe, which reports network errors itself.
+  }
+
+  let catalogue = models
+  if (!catalogue?.length) {
+    try {
+      catalogue = await fetchModels(key, { signal })
+    } catch (e) {
+      return {
+        ok: false,
+        status: e?.status,
+        message: `ZenMux unreachable: ${e?.cause?.code || e?.message || "network error"}`,
+        network: true,
+      }
+    }
+  }
+
+  const tried = new Set()
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const model = probeModel(catalogue ?? [], served)
+    const pick = (catalogue ?? []).find((m) => m.id === model && !tried.has(m.id))?.id
+    const target = pick || (catalogue ?? []).map((m) => m.id).find((id) => !tried.has(id))
+    if (!target) break
+    tried.add(target)
+
+    const res = await chatProbe(key, target, { signal })
+    if (res.status === 200) return { ok: true, via: "chat", model: target }
+    if (res.status === 429 || res.status === 402) return { ok: true, via: "chat-throttled", model: target }
+    if (res.status === 401) return { ok: false, status: 401, message: res.message }
+    if (res.status === 403 && /model/i.test(res.message)) continue // not in this plan; try another
+    return { ok: false, status: res.status, message: res.message }
+  }
+  return { ok: false, status: 403, message: "ZenMux refused every model this account tried" }
 }
 
 async function fetchSubscription(managementKey, { signal } = {}) {
@@ -290,22 +379,24 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
               return { type: "failed", error: "A ZenMux Management API key starts with sk-mgmt-" }
             }
 
-            // The subscription key: a management request proves it is live.
-            try {
-              const probe = await checkSubscriptionKey(key, { signal })
-              if (probe.status === 401 || probe.status === 403) {
-                const why = messageOf(probe.text)
-                const legacy = LEGACY_KEY_RE.test(key) ? " — this key's sk-ss-v1- / sk-mg-v1- prefix was retired on 2026-11-10: create a new key" : ""
-                return {
-                  type: "failed",
-                  error: `ZenMux refused this API key (HTTP ${probe.status})${why ? `: ${why.slice(0, 300)}` : ""}${legacy}`,
-                }
+            // The subscription key. Only a real (one-token) request proves it:
+            // the model lists are public and the management endpoints answer
+            // 403 to a good subscription key as well.
+            const verdict = await validateSubscriptionKey(key, { signal })
+            if (!verdict.ok) {
+              const legacy = LEGACY_KEY_RE.test(key)
+                ? " — this key's sk-ss-v1- / sk-mg-v1- prefix was retired on 2026-11-10: create a new key"
+                : ""
+              const hint = MANAGEMENT_KEY_RE.test(key)
+                ? " — this looks like a Management API key: paste it into the second question, not the first"
+                : verdict.status === 403 && /permission|access_denied|forbidden/i.test(verdict.message ?? "")
+                  ? " — ZenMux gives this answer both for a bad key and for a key that may not make requests: check it is a subscription/pay-as-you-go key (not a Management key), created after 2026-11-10, on Starter or above (Free has no API access)"
+                  : ""
+              if (verdict.network) return { type: "failed", error: verdict.message }
+              return {
+                type: "failed",
+                error: `ZenMux refused this API key (HTTP ${verdict.status})${verdict.message ? `: ${verdict.message.slice(0, 300)}` : ""}${legacy}${hint}`,
               }
-              if (!probe.ok && probe.status >= 500) {
-                return { type: "failed", error: `ZenMux answered HTTP ${probe.status}` }
-              }
-            } catch (e) {
-              return { type: "failed", error: `ZenMux unreachable: ${e?.cause?.code || e?.message || "network error"}` }
             }
 
             // The management key: check it too, but a network hiccup there
@@ -476,7 +567,9 @@ export const _internal = {
   request,
   annotate,
   isKeyRefusal,
-  checkSubscriptionKey,
+  validateSubscriptionKey,
+  probeModel,
+  chatProbe,
   messageOf,
   subscriptionToUsage,
   isChatModel,

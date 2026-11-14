@@ -93,6 +93,25 @@ App 里的操作路径：**Plugins → Add a plugin** 指向文件夹 → 在 pr
 额度出现在 Providers 卡片和 `magpie quota`。agent 里模型名是 `zenmux/<vendor>/<model>`，
 例如 `zenmux/deepseek/deepseek-v4.1-flash`、`zenmux/openai/gpt-6.1-terra`。
 
+## 登录报 403 时看这里
+
+ZenMux 对多种情况都回同一句 `403 access_denied` / “You have no permission to access this
+resource”，所以**不能只看状态码**。按可能性排序：
+
+1. Key 是 **2026-11-10 之前**建的（`sk-ss-v1-…`、`sk-ai-v1-…`、`sk-mg-v1-…`）：那批已停用，
+   去 <https://zenmux.ai/platform/subscription> 建新的 `sk-subs-…`。
+2. 把 **Management Key 填进了第一个问题**：第一个问题要订阅 Key，第二个才是 `sk-mgmt-…`。
+3. **Free 档**：完全没有 API 权限（只能 Studio Chat），需要 Starter 及以上。
+4. **组织（organization）账号的 Key** 没有推理权限：让套餐所有者给这个 Key 开权限。
+
+`sk-payg-…`（按量付费）Key 也能用，花的是 credits 而不是 Flows。
+
+顺带说明：模型列表接口（`/api/v1/models`、`/api/anthropic/v1/models`、
+`/api/vertex-ai/v1beta/models`）对**任何** Key 都回 200，验证不了 Key；而所有
+`/api/v1/management/*` 对**合法订阅 Key** 也回 403（它要 Management Key）。所以 v0.1.1 起，
+登录改为发一个 `max_tokens: 1` 的真实请求来验证（消耗几个 token，可忽略；`429/402`
+也算 Key 有效，因为那说明 Key 能用、只是额度用完了）。
+
 ## 已经踩平/需要知道的坑
 
 这些是调研和沙箱实测（magpie v0.1.3913）踩出来的，改插件时值得照着做：

@@ -96,9 +96,31 @@ from the provider's row.
   A management key that is refused does **not** mark the chat account as expired
   (`signIn: "kept"`), because the two keys are independent.
 
+- **How sign-in proves your key** — the model lists (`/api/v1/models`,
+  `/api/anthropic/v1/models`, `/api/vertex-ai/v1beta/models`) answer `200` to *any* key, so
+  they cannot test one; and every `/api/v1/management/*` endpoint answers `403` to a valid
+  subscription key, because it wants a Management API key. So sign-in proves the
+  subscription key with one minimal real request (`max_tokens: 1`). It costs a few tokens
+  of one Flow; a `429`/`402` still counts as a good key, because it means the key works
+  and the window is spent.
 - **No check-in** — ZenMux has no daily check-in, so the plugin implements no
   `auth.checkin`. It never writes files, never runs the vendor's CLI and sends
   requests only to `zenmux.ai` (or an override you set).
+
+## If sign-in answers 403
+
+ZenMux answers `403 access_denied` / "You have no permission to access this resource"
+for several different situations, so the message alone does not say which. In order of
+likelihood:
+
+1. A key made **before 2026-11-10** (`sk-ss-v1-…`, `sk-ai-v1-…`, `sk-mg-v1-…`): those were
+   disabled. Create a `sk-subs-…` key at <https://zenmux.ai/platform/subscription>.
+2. The **Management key pasted into the first question**: the first question wants the
+   subscription key, the second one the `sk-mgmt-…` key.
+3. **Free plan**: it has no API access at all (Studio Chat only) — Starter/Pro/Max/Ultra needed.
+4. An **organization** key without inference permission: ask the plan owner to allow the key.
+
+`sk-payg-…` (pay-as-you-go) keys work too — they spend credits instead of Flows.
 
 ## Options
 
