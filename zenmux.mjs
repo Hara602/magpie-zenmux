@@ -160,11 +160,32 @@ export function keyOf(auth) {
   return ""
 }
 
+// bearerOf is the token a request is signed with, whichever way the account
+// signed in: an API key verbatim, or an OAuth account's access token.
+export function bearerOf(auth) {
+  const a = isObj(auth) ? auth : {}
+  const key = keyOf(a)
+  if (key) return key
+  if (a.type === "oauth" && typeof a.access === "string") return a.access.trim()
+  return ""
+}
+
+export function isOAuth(auth) {
+  return isObj(auth) && auth.type === "oauth"
+}
+
+// managementKeyOf reads the Management API key an account carries. A sign-in
+// keeps it either inside `metadata` (api method) or beside the tokens (oauth
+// method stores every extra field next to refresh/access).
 export function managementKeyOf(auth) {
   const a = isObj(auth) ? auth : {}
   const meta = isObj(a.metadata) ? a.metadata : {}
   for (const k of ["managementKey", "management_key", "mgmtKey"]) {
     const v = meta[k]
+    if (typeof v === "string" && v.trim()) return v.trim()
+  }
+  for (const k of ["managementKey", "management_key", "mgmtKey"]) {
+    const v = a[k]
     if (typeof v === "string" && v.trim()) return v.trim()
   }
   return ""

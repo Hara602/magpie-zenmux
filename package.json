@@ -1,6 +1,6 @@
 {
   "name": "opencode-zenmux-auth",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "description": "OpenCode / magpie provider plugin: ZenMux Builder Plan — sign in with a subscription API key and a Management API key, chat through ZenMux, and show the plan's rolling 5-hour / 7-day Flows",
   "type": "module",
   "main": "./index.mjs",
@@ -11,6 +11,7 @@
   "files": [
     "index.mjs",
     "zenmux.mjs",
+    "oauth.mjs",
     "README.md",
     "LICENSE"
   ],
@@ -29,13 +30,13 @@
   "magpie": {
     "name": "ZenMux Builder Plan",
     "summary": {
-      "en": "ZenMux's Builder Plan (Free / Pro / Max / Ultra) on your subscription API key, with the rolling 5-hour and 7-day Flows and the plan's monthly cap, read with a Management API key.",
-      "zh": "用 ZenMux 订阅 API Key 接入 Builder Plan（Free / Pro / Max / Ultra），并通过 Management API Key 读取滚动的 5 小时、7 天 Flows 额度与月度上限。"
+      "en": "ZenMux's Builder Plan (Free / Pro / Max / Ultra): browser OAuth sign-in or a subscription API key, each model on the protocol it serves best, and the rolling 5-hour and 7-day Flows.",
+      "zh": "用 ZenMux 订阅接入 Builder Plan（Free / Pro / Max / Ultra）：支持浏览器 OAuth 登录或订阅 API Key，按模型选择最佳协议，并显示滚动 5 小时 / 7 天 Flows 额度。"
     },
     "icon": "https://zenmux.ai/docs/favicon.svg",
     "maxConcurrency": 3
   },
   "scripts": {
-    "test": "node --test test/zenmux.test.mjs"
+    "test": "node --test test/zenmux.test.mjs test/oauth.test.mjs"
   }
 }

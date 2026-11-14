@@ -93,8 +93,9 @@ magpie plugin add github:Hara602/magpie-zenmux                  # 直接拉 GitH
 magpie plugin add .                                          # 或本地仓库根目录
 magpie plugin add opencode-zenmux-auth                       # 或 npm 发布之后
 
-# 3) 登录：按提示粘贴订阅 Key、管理 Key（可空）、邮箱（可空，用于给账号起名）
-magpie plugin login zenmux
+# 3) 登录：两种方式二选一
+magpie plugin login zenmux oauth   # 浏览器授权（推荐，不用粘 Key）
+magpie plugin login zenmux         # 或选订阅 API Key：粘贴 sk-subs-… → 管理 Key（可空）→ 邮箱（可空）
 
 # 4) 三连验证
 magpie plugin --json      # zenmux 有模型、usage:true、signedIn:true
@@ -180,6 +181,24 @@ magpie 里要放的是 agent 真能调用的模型，所以会逐层收窄：
 
 非聊天模型是**故意**不列的：在聊天 agent 里选了视频模型，第一个请求就会失败。
 想全部列出来（例如给走 `/v1/images/generations` 的用法），设 `options.includeNonChat: true`。
+
+## 两种登录方式（0.2.0 起）
+
+| 方式 | 需要什么 | 额度 |
+| --- | --- | --- |
+| **ZenMux OAuth（浏览器登录）** | 什么都不用粘：浏览器授权 + PKCE + 本机回环回调 | 仍需 Management API Key（登录时一并问，可留空） |
+| **ZenMux 订阅 API Key** | 粘贴 `sk-subs-…` | 同上 |
+
+OAuth 用的就是 ZenMux 给 OpenCode / DeepSeek Harness 的那套流程：公开原生客户端、`S256`
+PKCE、`127.0.0.1:<随机端口>/callback` 回调、scope `inference:invoke offline_access`，
+refresh token 每次续期都轮换（magpie 在到期前 2 分钟续，且并发只续一次；`rotating: true`
+告诉 magpie 这个 refresh token 是一次性的）。续期回来没有新 refresh token 就说明登录已失效，
+账号会被标记为需要重新登录，而不是无限重试。
+
+两种方式产出的凭据都用于签名请求：API Key 原样用，OAuth 用 access token。
+
+额度仍然离不开 Management API Key——ZenMux 的 `management/*` 接口拒绝 OAuth token。
+它在登录时作为**可选项**询问，并与账号并存（存为 `managementKey`），不会替代 token。
 
 ## 每个模型走哪个 API（0.1.9 起）
 

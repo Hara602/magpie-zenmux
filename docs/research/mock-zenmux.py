@@ -77,12 +77,31 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
 
+    def _oauth_get(self, u):
+        if u.path != "/oauth/authorize":
+            return False
+        q = parse_qs(u.query)
+        redirect = (q.get("redirect_uri") or [""])[0]
+        state = (q.get("state") or [""])[0]
+        if not redirect:
+            self._json(400, {"error": "no redirect_uri"})
+            return True
+        sep = "&" if "?" in redirect else "?"
+        loc = f"{redirect}{sep}code=mock-auth-code&state={state}"
+        self.send_response(302)
+        self.send_header("location", loc)
+        self.send_header("content-length", "0")
+        self.end_headers()
+        return True
+
     def do_GET(self):
         u = urlparse(self.path)
         if u.path == "/api/v1/models":
             return self._json(200, MODELS)
         if u.path == "/api/subscription/public/get_all_plans":
             return self._json(200, PLANS)
+        if self._oauth_get(u):
+            return
         if u.path == "/api/frontend/model/available/list":
             return self._json(200, CATALOGUE)
         if u.path == "/api/v1/management/subscription/detail":
@@ -97,6 +116,32 @@ class Handler(BaseHTTPRequestHandler):
         h = self.headers.get("authorization") or ""
         return h[7:].strip() if h.lower().startswith("bearer ") else ""
 
+    def _oauth_token(self, u, raw=b""):
+        if u.path != "/oauth/token":
+            return False
+        # do_POST already read the body; reading rfile again would block.
+        form = parse_qs(raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw))
+        grant = (form.get("grant_type") or [""])[0]
+        if grant == "authorization_code":
+            if (form.get("code") or [""])[0] != "mock-auth-code":
+                self._json(400, {"error": "invalid_grant"})
+                return True
+            self._json(200, {"access_token": "mock-access-1", "refresh_token": "mock-refresh-1",
+                             "expires_in": 7200, "token_type": "Bearer"})
+            return True
+        if grant == "refresh_token":
+            old = (form.get("refresh_token") or [""])[0]
+            if not old.startswith("mock-refresh"):
+                self._json(400, {"error": "invalid_grant"})
+                return True
+            tail = old.rsplit("-", 1)[-1]
+            n2 = (int(tail) + 1) if tail.isdigit() else 2
+            self._json(200, {"access_token": f"mock-access-{n2}", "refresh_token": f"mock-refresh-{n2}",
+                             "expires_in": 7200})
+            return True
+        self._json(400, {"error": "unsupported_grant_type"})
+        return True
+
     def do_POST(self):
         u = urlparse(self.path)
         n = int(self.headers.get("content-length") or 0)
@@ -106,6 +151,8 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             body = {}
         import threading
+        if self._oauth_token(u, raw):
+            return
         if u.path in ("/api/v1/chat/completions", "/api/v1/responses", "/api/anthropic/v1/messages"):
             try:
                 seen = json.load(open(PROVIDER_LOG)) if os.path.exists(PROVIDER_LOG) else []
@@ -122,7 +169,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path != "/api/v1/chat/completions":
             return self._json(404, {"error": {"message": "no such route: " + u.path}})
         # A stand-in for ZenMux's key check: sk-subs-… / sk-payg-… work.
-        if not self._key().startswith(("sk-subs-", "sk-payg-")):
+        if not self._key().startswith(("sk-subs-", "sk-payg-", "mock-access-")):
             return self._json(
                 403,
                 {"error": {"code": "403", "type": "access_denied",

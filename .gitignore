@@ -16,3 +16,4 @@ Thumbs.db
 .dev/
 .mock-provider-log.json
 docs/research/.mock-provider-log.json
+.oauth/

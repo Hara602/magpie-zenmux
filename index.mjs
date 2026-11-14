@@ -21,6 +21,13 @@
 import { readFileSync, statSync } from "node:fs"
 
 import {
+  DEFAULT_CLIENT_ID as OAUTH_CLIENT_ID,
+  DEFAULT_ORIGIN as OAUTH_ORIGIN,
+  beginAuthorization,
+  refreshAccessToken,
+} from "./oauth.mjs"
+
+import {
   API as ZENMUX_API,
   ANY_KEY_RE,
   EFFORTS,
@@ -31,11 +38,13 @@ import {
   NPM,
   PROVIDER,
   SUBSCRIPTION_KEY_RE,
+  bearerOf,
   entries,
   isChatModel,
+  isOAuth,
   isObj,
   isSubscriptionKey,
-  keyOf,
+
   managementKeyOf,
   matches,
   apiFor,
@@ -52,6 +61,13 @@ const API = (process.env.ZENMUX_API_BASE || ZENMUX_API).replace(/\/+$/, "")
 const MANAGEMENT_API = (process.env.ZENMUX_MANAGEMENT_API_BASE || ZENMUX_MANAGEMENT_API).replace(/\/+$/, "")
 const PUBLIC_API = (process.env.ZENMUX_PUBLIC_API_BASE || ZENMUX_PUBLIC_API).replace(/\/+$/, "")
 // ZenMux's Anthropic-compatible protocol lives beside /api/v1, not under it.
+// ZenMux's OAuth authorization server and the public native client magpie
+// signs in with. Overridable to point a test at a local stand-in.
+const OAUTH = {
+  origin: (process.env.ZENMUX_OAUTH_ORIGIN || OAUTH_ORIGIN).replace(/\/+$/, ""),
+  clientId: process.env.ZENMUX_OAUTH_CLIENT_ID || OAUTH_CLIENT_ID,
+}
+
 const ANTHROPIC_API = (
   process.env.ZENMUX_ANTHROPIC_API_BASE || `${new URL(API).origin}/api/anthropic/v1`
 ).replace(/\/+$/, "")
@@ -596,11 +612,94 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
             }
           },
         },
+        {
+          // The same browser sign-in ZenMux's official OpenCode and DSH plugins
+          // use: PKCE, a loopback callback, and refresh-token rotation. No key
+          // to copy. The quota still needs a Management API key (ZenMux's
+          // management endpoints refuse OAuth tokens), so it is asked here too.
+          type: "oauth",
+          label: "ZenMux OAuth (browser sign-in)",
+          prompts: [
+            {
+              type: "password",
+              key: "managementKey",
+              required: false,
+              message: "Management API Key (zenmux.ai/platform/management → sk-mgmt-…; optional, needed for the Flows)",
+              validate: (v) => {
+                const t = String(v ?? "").trim()
+                if (!t) return undefined
+                if (!MANAGEMENT_KEY_RE.test(t)) return "A ZenMux Management API key starts with sk-mgmt-"
+                return undefined
+              },
+            },
+            {
+              type: "text",
+              key: "email",
+              required: false,
+              message: "Email (optional; names this account in magpie)",
+            },
+          ],
+          async authorize(inputs, { signal } = {}) {
+            const managementKey = String(inputs?.managementKey ?? "").trim()
+            const email = String(inputs?.email ?? "").trim()
+            if (managementKey && !MANAGEMENT_KEY_RE.test(managementKey)) {
+              return { type: "failed", error: "A ZenMux Management API key starts with sk-mgmt-" }
+            }
+
+            let flow
+            try {
+              flow = await beginAuthorization({ origin: OAUTH.origin, clientId: OAUTH.clientId, signal })
+            } catch (e) {
+              return { type: "failed", error: `Could not start the ZenMux sign-in: ${e?.message || "unknown error"}` }
+            }
+
+            return {
+              url: flow.url,
+              instructions: "Finish signing in to ZenMux in your browser; this window then does the rest.",
+              method: "auto",
+              async callback() {
+                try {
+                  const auth = await flow.complete()
+                  return {
+                    type: "success",
+                    ...auth,
+                    ...(managementKey ? { managementKey } : {}),
+                    ...(email ? { email } : {}),
+                    plan: "builder",
+                  }
+                } catch (e) {
+                  return { type: "failed", error: e?.message || "the ZenMux sign-in did not finish" }
+                } finally {
+                  flow.close()
+                }
+              },
+            }
+          },
+        },
       ],
+
+      // magpie's own hooks for an OAuth account: renew a little before the
+      // access token runs out, and tell magpie the refresh token is single-use.
+      refreshLead: 120_000,
+      rotating: true,
+      async refresh(auth, provider, { signal } = {}) {
+        try {
+          return await refreshAccessToken(auth, {
+            origin: OAUTH.origin,
+            clientId: OAUTH.clientId,
+            signal,
+          })
+        } catch (e) {
+          // A vendor that rotated the token and refused the old one has ended
+          // this sign-in for good; anything else is worth retrying.
+          if (e?.signIn) throw e
+          throw new Error(`ZenMux did not renew this sign-in: ${e?.message || "network error"}`)
+        }
+      },
 
       async loader(getAuth) {
         const auth = await getAuth()
-        const key = keyOf(auth)
+        const key = bearerOf(auth)
         if (!key) return {}
         return {
           // No baseURL here: each model carries its own api url (chat on
@@ -615,7 +714,7 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
       // account's scope, so a refreshed token would be saved to this account.
       async usage(getAuth) {
         const auth = await getAuth()
-        const key = keyOf(auth)
+        const key = bearerOf(auth)
         const managementKey = managementKeyOf(auth)
         if (!key) return { windows: [] }
         if (!managementKey) {
@@ -671,7 +770,7 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
         // Signed out this still works: the catalogue is public, and magpie's
         // bundled models.dev list is smaller than ZenMux's (it has no qwen3.8,
         // for one). Without a key there is no plan to filter by.
-        const key = keyOf(auth)
+        const key = bearerOf(auth)
 
         let live
         try {
@@ -687,7 +786,10 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
         }
         if (!live.length) return base
 
-        const subscription = isSubscriptionKey(key)
+        // A Builder Plan spends Flows, not dollars, so those models carry no
+        // per-token price. An OAuth account is a ZenMux account too: treat it as
+        // plan-like, because pricing it in USD would misprice a subscription.
+        const subscription = isOAuth(auth) || isSubscriptionKey(key)
 
         // Only the models this account's plan serves, when we can tell which
         // plan that is: ZenMux answers 403 for a model outside it.

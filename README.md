@@ -40,7 +40,8 @@ magpie plugin add github:Hara602/magpie-zenmux
 # or from a clone / downloaded folder, for development
 magpie plugin add .
 
-magpie plugin login zenmux        # asks for the subscription key, the management key (optional), an email (optional)
+magpie plugin login zenmux        # pick a method: OAuth (browser) or an API key
+magpie plugin login zenmux oauth  # straight to the browser sign-in
 magpie quota                      # 5h / 7d Flows, monthly cap, resets
 magpie provider test zenmux       # one tiny chat request
 magpie plugin --json              # what the plugin lists: models, usage, sign-in
@@ -194,6 +195,27 @@ those 219 models). magpie has to show models an agent can actually call, so:
 
 Non-chat models are listed by default so the plan is fully visible; a *chat* request to one
 of them fails at ZenMux. `includeNonChat: false` hides them.
+
+## Two ways to sign in
+
+| Method | What it needs | Quota |
+| --- | --- | --- |
+| **ZenMux OAuth (browser sign-in)** | nothing to copy — a browser window, PKCE, a loopback callback | needs a Management API key, asked during sign-in |
+| **ZenMux subscription API key** | a paste of `sk-subs-…` | needs a Management API key, asked during sign-in |
+
+The OAuth method is the same flow ZenMux ships for OpenCode and DeepSeek Harness: a public
+native client, `S256` PKCE, a callback on `127.0.0.1:<random port>/callback`, scope
+`inference:invoke offline_access`, and a refresh token that rotates on every renewal
+(magpie renews two minutes before expiry, one renewal at a time; `rotating: true` tells it
+the token is single-use). A rotation that comes back without a new refresh token means the
+sign-in is over, so the account is marked as needing a new one instead of retrying forever.
+
+Either way, requests are signed with what the sign-in produced: an API key verbatim, or the
+OAuth account's access token.
+
+The quota still needs a Management API key: ZenMux's `management/*` endpoints refuse OAuth
+tokens. It is asked as an optional question during sign-in, and it is kept beside the
+account (`managementKey`), never replacing the token.
 
 ## Which API each model is asked on
 
