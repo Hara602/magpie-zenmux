@@ -51,17 +51,17 @@ magpie 的 Models 页和 agent 的模型选择器里，模型元数据以 **mode
   推理档位（`reasoning_options` 里的 effort 值）都用 models.dev 的；ZenMux 实时目录只补
   models.dev 没说的字段。
 - models.dev 没收录的模型（ZenMux 实时目录里另外约 100 个）：用实时目录，推理档位退回插件的
-  三档兜底 low / medium / high。
+  五档兜底 low / medium / high / xhigh / max。
 - 推理档位读的是 magpie 自己的 models.dev 快照（就是 `magpie sync` 打印的那个文件：
   各平台默认都是 `~/.cache/magpie/models.json`，Windows 的 `C:\Users\<你>\.cache\magpie\models.json`
   也是这个位置；另外还会查 `$XDG_CACHE_HOME`、macOS `~/Library/Caches`、Windows `%LocalAppData%`），**只读**：
   不额外下载，也不往外发任何东西；快照不存在、读不了，或早于 models.dev 的档位字段时，
-  退回实时目录 + 三档兜底。
+  退回实时目录 + 五档兜底。
 
 效果举例（models.dev 的 zenmux 条目说了算）：`moonshotai/kimi-k3` 只提供 `max` 一档，
 `deepseek/deepseek-v4.1-flash` 是 `low/high/max`，`anthropic/claude-fable-5.1` 是
 `low/medium/high/xhigh/max`；`openai/gpt-6.1-terra` 不在 models.dev 的 zenmux 条目里，
-所以保持三档兜底。要自己收窄档位，仍可用 `magpie model efforts zenmux/<vendor>/<model> low,medium,high`
+所以保持五档兜底。要自己收窄档位，仍可用 `magpie model efforts zenmux/<vendor>/<model> low,medium,high`
 （`--reset` 恢复）。
 
 ## 目录
@@ -179,90 +179,38 @@ magpie 里要放的是 agent 真能调用的模型，所以会逐层收窄：
 | → 你套餐包含的 | **218**（默认） | 套餐全量：170 聊天 + 48 非聊天；只列聊天时是 **169**（1 个聊天模型 `inclusionai/ring-2.6-1t` 不在任何 Builder Plan 里） |
 | 未登录时 | 219 | 0.1.5 起也读 ZenMux 的公开目录（之前是 models.dev 的 102 个，缺 qwen3.8 等） |
 
-非聊天模型是**故意**不列的：在聊天 agent 里选了视频模型，第一个请求就会失败。
-想全部列出来（例如给走 `/v1/images/generations` 的用法），设 `options.includeNonChat: true`。
+默认会列出套餐里的非聊天模型；只用于聊天时，建议设 `options.includeNonChat: false`。
 
-### ZenMux 文档到底怎么说的（我之前错在哪）
+## 推理档位
 
-据 [Protocol Conversion Compatibility](https://zenmux.ai/docs/api/protocol-conversion.html)：
+像 Codex 一样，选择模型和推理档位即可，协议参数与思考预算由插件内部处理。
 
-- **推理/思考在全部协议转换中都保留**——Support Overview 表是 All / All / All / All。
-  不存在「某协议无法承载档位」这回事。
-- **Chat ↔ Responses 的档位是原样透传**（`reasoning_effort` → `reasoning.effort`，
-  文档原话 "Effort is passed through"）。
-- **一旦要转成 Messages，档位会被换算成预算**，而这张映射表只到 high：
-  `low`/`medium`/`high` → 2048/5120/10240。**没有 max / xhigh 这一行**，所以这类档位
-  在这条路上会丢。
-- 文档明说：「`reasoning_effort` 与 `thinking` 是区间映射，不是精确的 token 上限保留；
-  需要精确控制思考预算时，优先用目标协议的原生参数。」
+- 模型声明了哪些档位，就显示哪些档位，顺序也保持一致。例如 DeepSeek V4.1 Flash
+  是 `low / high / max`。
+- 元数据只声明思考开关的模型，不会凭空增加档位；缺少档位资料的推理模型使用
+  `low / medium / high / xhigh / max` 五档兜底。
+- Chat 和 Responses 分别通过 `reasoning_effort`、`reasoning.effort` 原样传递所选档位，
+  `max` 仍是 `max`，`xhigh` 仍是 `xhigh`。
+- 优先读取 Magpie 的 `x-magpie-effort` 原始选择，避免协议转换后的默认值覆盖用户选择；
+  这个内部请求头会在发往 ZenMux 前删除。
 
-所以插件的规则是：优先走模型**原生**的协议（catalogue 里 `suitable_api` 的第一个，完全不转换），
-并且让会推理的模型避开 Messages（除非它只有这一个协议）。这样 `max` 就以 `max` 发出去，
-而不是被塞进预算里。
-
-对 `deepseek/deepseek-v4.1-flash` 来说就是 **chat completions**，也正是 DeepSeek 自己文档写的
-（`reasoning_effort: low/high/max`）。这条路上没有任何转换，`max` 原样到达。
-
-只有确实落到 Messages 的模型才会用预算：low/medium/high 按 ZenMux 的 2048/5120/10240，
-高于 high 的给 24576 或 32768，并按 Anthropic 的要求收敛到 `max_tokens` 的 80% 以内。
-
-### 为什么这个模型走的是某个协议（而不是别的）
-
-ZenMux 一个模型会挂在多个 endpoint 上，但**这些 endpoint 并不都接受推理参数**。以
-`deepseek/deepseek-v4.1-flash` 为例：它的 Messages 和 Responses endpoint 完全没有
-`thinking` / `reasoning` 参数，只有 `chat.completions` 适配器接受 `reasoning_effort` 和
-`thinking`。上一版把它路由到 Messages，档位在离开 magpie 之前就被丢掉了——这就是「max 变
-high」的根因。
-
-所以现在按这个顺序选协议：
-
-| 顺序 | 协议 | 原因 |
-| --- | --- | --- |
-| 1 | Responses | magpie 原样转发 `reasoning.effort`（`xhigh` 可用） |
-| 2 | chat completions | magpie 原样转发 `reasoning_effort` |
-| 3 | Messages | 每个请求都被改成 `thinking:{type:"adaptive"}`，档位丢失，只作兜底 |
-
-且对于会推理的模型，只在**适配器真的接受推理参数**的 endpoint 之间选（`reasoning_effort`、
-`reasoning`、`thinking`、`enable_thinking`、`thinking_budget`）。都不接受时才退回目录顺序。
-
-每个协议的最高档还会附带显式的 `thinking: {type:"enabled", budget_tokens:N}`，
-因为 ZenMux 的 chat 适配器接受预算，否则它会用 `max_completion_tokens` 自己反推。
-
-## 推理档位（为什么选 max 会变成 high）
-
-magpie 对 ZenMux 的协议只翻译 `low` / `medium` / `high` 这三个档位名。客户端发别的东西
-（`max`、`ultra`、thinking 预算）都会被夹回 `high`——这就是**选 max 结果变成 high** 的原因。
-插件现在让最高档位真正可表达：
-
-| 路由 | 提供的档位 | ZenMux 实际收到 |
-| --- | --- | --- |
-| Responses | `none` / `minimal` / `low` / `medium` / `high` / **`xhigh`** | `reasoning.effort: "xhigh"` |
-| Chat completions | `minimal` / `low` / `medium` / `high` | `reasoning_effort: "high"`（没有更高的） |
-| Anthropic Messages | models.dev 命名的档位 | `thinking: {type:"enabled", budget_tokens:N}` |
-
-档位以「变体」形式声明在模型上，带着厂商自己的参数，magpie 就不用靠预算反推：
-
-```js
-variants: { low: { reasoningEffort: "low" }, high: { reasoningEffort: "high" },
-            xhigh: { reasoningEffort: "xhigh" } }   // Responses
-```
-
-客户端自己的最高档名（`max`/`ultra`/`xhigh`）会被重命名为厂商的最高档，而不是先提供再被夹。
-Chat completions 在 ZenMux 里本就没有高于 `high` 的档位，所以 `max` 在那边收敛到 `high`——
-这是厂商上限，不是 bug。
-
-Anthropic Messages 下 magpie 总是发 `thinking: {type:"adaptive"}`，把客户端要的预算丢掉。
-插件会把它还原成真实预算：
+Messages 会把 adaptive thinking 转换成思考预算：
 
 | 档位 | `budget_tokens` |
 | --- | --- |
+| none | 关闭思考 |
+| minimal | 1024 |
 | low | 2048 |
-| medium | 8192 |
-| high | 16384 |
-| max / xhigh / 未知 | 32768 |
+| medium | 5120 |
+| high | 10240 |
+| xhigh | 24576 |
+| max / ultra | 32768 |
 
-且不超过 `max_tokens * 0.8`（Anthropic 自身的限制），调用方已给预算时不动它。
-`options.effort`（默认 `high`）决定档位信息已丢失时用哪一档。
+生成的预算通常不超过 `max_tokens` 的 80%，至少为 1024，且始终小于 `max_tokens`；
+`max_tokens <= 1024` 时关闭思考，避免产生无效请求。调用方显式提供的正数预算会保留，
+但选择 `none` 时会关闭思考。只有请求没有携带档位时，才用 `options.effort`，默认 `high`。
+
+协议转换细节见 [ZenMux 官方说明](https://zenmux.ai/docs/api/protocol-conversion.html)。
 
 ## 两种登录方式（0.2.0 起）
 
@@ -274,8 +222,10 @@ Anthropic Messages 下 magpie 总是发 `thinking: {type:"adaptive"}`，把客�
 OAuth 用的就是 ZenMux 给 OpenCode / DeepSeek Harness 的那套流程：公开原生客户端、`S256`
 PKCE、`127.0.0.1:<随机端口>/callback` 回调、scope `inference:invoke offline_access`，
 refresh token 每次续期都轮换（magpie 在到期前 2 分钟续，且并发只续一次；`rotating: true`
-告诉 magpie 这个 refresh token 是一次性的）。续期回来没有新 refresh token 就说明登录已失效，
-账号会被标记为需要重新登录，而不是无限重试。
+告诉 magpie 这个 refresh token 是一次性的）。明确拒绝 refresh grant，或成功轮换却只返回
+access token、没有替换用的 refresh token，才会要求重新登录。HTTP 429、服务端错误、
+响应格式异常和网络故障会保留登录状态，供 Magpie 重试。
+浏览器回调无论成功还是报错，都必须先匹配本次登录的 `state`。
 
 两种方式产出的凭据都用于签名请求：API Key 原样用，OAuth 用 access token。
 
@@ -284,27 +234,24 @@ refresh token 每次续期都轮换（magpie 在到期前 2 分钟续，且并�
 
 ## 每个模型走哪个 API（0.1.9 起）
 
-ZenMux 同一个模型可以用多种协议调用，每种协议的请求形状不同。插件按 **ZenMux 官方
-OpenCode 插件同款顺序**，为每个模型选它支持的最好协议：
+ZenMux 同一个模型可以支持多种协议。在 `auto` 模式下，插件优先采用公开目录
+`suitable_api` 中排在最前的可用协议；推理模型会优先选择能直接传递档位名的 Chat 或
+Responses。目录没有给出顺序时，按 Responses、Chat、Messages 的顺序兜底。
 
-| 顺序 | 协议 | 基址 | 为什么 |
-| --- | --- | --- | --- |
-| 1 | Anthropic Messages（`@ai-sdk/anthropic`） | `/api/anthropic/v1` | 只有这个协议能表达 `cache_control`，prompt cache 才真正生效 |
-| 2 | OpenAI Responses（`@ai-sdk/openai`） | `/api/v1` | 推理摘要 + 会话状态 |
-| 3 | Chat completions（`@ai-sdk/openai-compatible`） | `/api/v1` | 所有模型都支持的兜底 |
+| 协议 | SDK | 基址 |
+| --- | --- | --- |
+| Chat completions | `@ai-sdk/openai-compatible` | `/api/v1` |
+| OpenAI Responses | `@ai-sdk/openai` | `/api/v1` |
+| Anthropic Messages | `@ai-sdk/anthropic` | `/api/anthropic/v1` |
 
-协议来源是 ZenMux 的公开富目录（`/api/frontend/model/available/list` 里每个模型的
-`suitable_api`）。当前目录下 218 个模型里：110 个 chat、80 个 Messages、28 个 Responses。
-
-其中 61 个聊天模型——**包括你用到的 `deepseek/deepseek-v4.1-flash` 和
-`qwen/qwen3.8-max-0902`——只支持 chat completions**，所以它们仍然走 chat；
-如果默认改成 Responses，这些模型会直接不可用。
+只列出 Chat 的模型仍然走 Chat，Codex 调用 Magpie 的 Responses 入口时也一样，
+由 Magpie 负责转换请求与响应。
 
 `options.protocol`：
 
 | 值 | 效果 |
 | --- | --- |
-| `"auto"`（默认） | 按上表逐模型路由 |
+| `"auto"`（默认） | 按模型目录逐模型路由 |
 | `"chat"` | 全部走 chat（旧行为） |
 | `"responses"` / `"messages"` | 强制某一种，不支持该协议的模型会失败 |
 
@@ -313,6 +260,10 @@ OpenCode 插件同款顺序**，为每个模型选它支持的最好协议：
 
 另外两个线缆细节：Messages 请求自动补 `anthropic-version: 2023-06-01`（ZenMux 要求），
 流式 chat 请求自动加 `stream_options.include_usage`，让流式回合也能统计 token。
+
+套餐、`models`、`exclude` 和 `includeNonChat` 过滤规则同时生效，排除项优先。
+过滤结果为空时会保持为空；只有目录请求失败时才退回已知模型，并继续应用显式模型过滤。
+模型列表、套餐、额度和登录检查请求支持取消，每个 HTTP 请求均有 30 秒超时。
 
 ## 登录报 403 时看这里
 
@@ -336,7 +287,9 @@ v0.1.2 又修了一处：探测用的模型如果恰好上游报错（例如某�
 `404 Server encountered an unexpected error`），旧版会把它当成 Key 无效。现在会依次换几个
 主流模型再试，并且把这些响应都算「Key 已通过」：`200`、`429/402`（额度用尽）、
 `400/404/422`（鉴权过了，是模型或请求体的问题）。只有 `401`、或文案里**不提模型**的 `403`
-才算拒绝。想固定探测模型可以设 `options.probeModel`。
+才算鉴权拒绝。5xx、网络故障和空目录会提示暂时无法验证，不会保存为登录成功。
+登录验证直接检查推理接口，不再用 Management 接口猜测推理权限。
+想固定探测模型可以设 `options.probeModel`。
 
 ## 已经踩平/需要知道的坑
 
@@ -347,7 +300,7 @@ v0.1.2 又修了一处：探测用的模型如果恰好上游报错（例如某�
    （本插件两种字段都写，嵌套那份生效。）
 2. **`GET /api/v1/models` 是公开的**，不校验 key（假 key 也 200），所以：
    - 模型列表可以未登录时就拿；
-   - **不能**用它来验证登录，插件改用 `GET /api/v1/management/generation?id=…`（订阅 Key 可读 metering）判断 key 是否有效。
+   - **不能**用它来验证登录，插件用一次最小聊天请求验证推理 Key。
 3. **按计划过滤模型**：`GET /api/subscription/public/get_all_plans` 是公开的，
    每个 `planKey`（free/starter/pro/max/ultra）带 `models[].model_slug`；
    与 `subscription/detail` 的 `plan.tier` 求交集即可。线上 $20 档现在叫 **Pro**（Starter 已隐退），
@@ -363,9 +316,9 @@ v0.1.2 又修了一处：探测用的模型如果恰好上游报错（例如某�
 7. **订阅 Key 与 PAYG Key 同一 API**：本插件对 `sk-payg-` 也工作（此时模型会带 USD 价格）；
    只有订阅 Key 的 cost 被刻意留空——订阅花的是 Flows 不是美元。
 8. **没有签到**：ZenMux 没有每日 check-in，不要实现 `auth.checkin`。
-9. **`provider test` 的 anthropic/gemini 行会 404**：该命令按 provider 基址 `…/api/v1`
-   探测所有协议，而 ZenMux 的 Anthropic/Vertex 端点在 `/api/anthropic/v1`、`/api/vertex-ai`。
-   agent 实际走 chat，功能不缺。
+9. **部分版本的 `provider test` 会探测错误基址**：如果命令按 `…/api/v1` 探测所有协议，
+   anthropic/gemini 的 404 可能只是基址不匹配；ZenMux 对应端点在
+   `/api/anthropic/v1`、`/api/vertex-ai`。agent 按各模型的协议和基址调用，应再验证实际请求。
 10. **keyless + prompts 才能让 `authorize` 拿到全部字段**：magpie 对 `api` 方法默认会
     自己问 key 且不交给 `authorize`；加 `keyless: true` 后，用 `prompts`（支持
     `required: false`、`password` 类型、`validate`）收齐字段。
@@ -400,7 +353,7 @@ m quota && m provider test zenmux && m plugin --json
 单测：
 
 ```sh
-npm test     # node --test，12 个用例
+npm test     # node --test，包含登录、OAuth、推理档位和模型过滤回归测试
 ```
 
 ## 发布到社区

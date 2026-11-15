@@ -92,14 +92,18 @@ App 里也可以：**Plugins → Add a plugin** 选那个文件夹，或在 Plug
 # 克隆方式：拉最新，然后让 magpie 重新加载
 cd "$env:USERPROFILE\magpie-plugins\magpie-zenmux"
 git pull
-magpie plugin off zenmux ; magpie plugin on zenmux
+magpie plugin off magpie-zenmux
+magpie plugin on magpie-zenmux
 
 # GitHub 方式：plugin update
 magpie plugin update
 
 # 卸载
-magpie plugin rm opencode-zenmux-auth
+magpie plugin rm magpie-zenmux
 ```
+
+上面的插件名对应 GitHub 安装或克隆后的 `magpie-zenmux` 文件夹；如果文件夹名不同，
+以 `magpie plugin` 列出的名称为准。`zenmux` 是登录时使用的 provider id。
 
 ## 6) 排错
 
@@ -109,7 +113,7 @@ magpie plugin rm opencode-zenmux-auth
 | add 之后行尾是 `failed: …` | 看报错；常见是 Bun 下载失败（代理/网络）。magpie 的代理在 Settings → 网关/代理，或设 `HTTPS_PROXY` 后重试 |
 | 登录报 “ZenMux refused this API key (HTTP 403)” + legacy 文案 | 用了旧前缀 Key（`sk-ss-v1-` / `sk-mg-v1-` 已停用），去控制台建 `sk-subs-…` / `sk-mgmt-…` |
 | 登录成功但 `magpie quota` 没有额度 | 登录时 Management Key 留空了；`magpie plugin logout zenmux` 后重新 `login`，把 `sk-mgmt-…` 填上 |
-| `provider test` 里 `anthropic`/`gemini` 是 404 | 正常：该命令按 `/api/v1` 探测所有协议，ZenMux 的 Anthropic/Vertex 端点在 `/api/anthropic/v1`、`/api/vertex-ai`；agent 走 chat，不影响 |
+| `provider test` 里 `anthropic`/`gemini` 是 404 | 部分版本按 `/api/v1` 探测所有协议，可能与 ZenMux 的 `/api/anthropic/v1`、`/api/vertex-ai` 不匹配；再验证实际模型请求，agent 按各模型的协议和基址调用 |
 | 之前装过官方 `@zenmux/opencode-oauth` | 两者都签 `zenmux`，只一个生效。先 `magpie plugin rm @zenmux/opencode-oauth`，或 `magpie plugin use opencode-zenmux-auth zenmux` 指定 |
 | 路径报错 / 找不到插件 | PowerShell 路径要带引号；别用 `Program Files` 等需要管理员权限的位置 |
 

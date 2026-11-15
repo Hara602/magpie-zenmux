@@ -1,6 +1,7 @@
 // Run with: node --test   (Node 20+; Bun runs it too)
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
+import { getEventListeners } from "node:events"
 import { test } from "node:test"
 
 import {
@@ -9,6 +10,7 @@ import {
   beginAuthorization,
   createPkce,
   exchangeBody,
+  exchangeToken,
   refreshAccessToken,
   toAuth,
   DEFAULT_CLIENT_ID,
@@ -142,7 +144,7 @@ test("beginAuthorization reports a vendor error without hanging", async () => {
   })
   const redirect = new URL(flow.url).searchParams.get("redirect_uri")
   const pending = flow.complete().catch((e) => e)
-  const res = await fetch(`${redirect}?error=access_denied`)
+  const res = await fetch(`${redirect}?error=access_denied&state=${flow.state}`)
   assert.equal(res.status, 400)
   assert.match((await pending).message, /access_denied/)
 })
@@ -171,4 +173,116 @@ test("refreshAccessToken rotates the pair, and refuses a dead sign-in", async ()
 
   // An API-key account has nothing to refresh.
   assert.equal(await refreshAccessToken({ type: "api", key: "sk-subs-x" }), undefined)
+})
+
+test("OAuth error callbacks must match state and leave the real flow available", async () => {
+  const { fetchImpl } = tokenServer([{ status: 200, json: { access_token: "acc", refresh_token: "ref" } }])
+  const flow = await beginAuthorization({ fetchImpl, timeoutMs: 5000 })
+  try {
+    for (const query of ["error=access_denied", "error=access_denied&state=wrong"]) {
+      const res = await fetch(`${flow.redirectUri}?${query}`)
+      assert.equal(res.status, 400)
+      assert.equal(await res.text(), "state mismatch")
+    }
+    const pending = flow.complete()
+    const res = await fetch(`${flow.redirectUri}?code=valid&state=${flow.state}`)
+    assert.equal(res.status, 200)
+    assert.equal((await pending).access, "acc")
+  } finally {
+    flow.close()
+  }
+})
+
+test("OAuth cancellation rejects the pending callback and releases its listener", async () => {
+  const controller = new AbortController()
+  const flow = await beginAuthorization({ signal: controller.signal, timeoutMs: 5000 })
+  const pending = flow.complete()
+  controller.abort()
+  await assert.rejects(pending, /cancelled/)
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0)
+  await assert.rejects(fetch(flow.redirectUri))
+  await assert.rejects(beginAuthorization({ signal: controller.signal }), { name: "AbortError" })
+})
+
+test("closing an unfinished OAuth flow rejects it without waiting for its timeout", async () => {
+  const flow = await beginAuthorization({ timeoutMs: 5000 })
+  const pending = flow.complete()
+  flow.close()
+  await assert.rejects(pending, /cancelled/)
+})
+
+test("successful OAuth callbacks remove their cancellation listener", async () => {
+  const controller = new AbortController()
+  const { fetchImpl } = tokenServer([{ status: 200, json: { access_token: "acc", refresh_token: "ref" } }])
+  const flow = await beginAuthorization({ fetchImpl, signal: controller.signal, timeoutMs: 5000 })
+  const pending = flow.complete()
+  await fetch(`${flow.redirectUri}?code=valid&state=${flow.state}`)
+  await pending
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0)
+})
+
+test("OAuth refuses token-shaped error responses during initial authorization", async () => {
+  const { fetchImpl } = tokenServer([{ status: 503, json: { access_token: "acc", refresh_token: "ref" } }])
+  const flow = await beginAuthorization({ fetchImpl, timeoutMs: 5000 })
+  const rejection = assert.rejects(flow.complete(), /HTTP 503/)
+  await fetch(`${flow.redirectUri}?code=valid&state=${flow.state}`)
+  await rejection
+})
+
+test("OAuth refresh keeps transient failures retryable and can recover on the next attempt", async () => {
+  const account = { type: "oauth", access: "old-access", refresh: "old-refresh" }
+  for (const failure of [
+    { status: 429, json: { error: "rate_limit" } },
+    { status: 500, json: { error: "server_error" } },
+    { status: 503, json: { error: "invalid_grant" } },
+    { status: 503, json: { access_token: "wrong-access", refresh_token: "wrong-refresh" } },
+    { status: 200, json: {} },
+  ]) {
+    const { fetchImpl } = tokenServer([
+      failure,
+      { status: 200, json: { access_token: "new-access", refresh_token: "new-refresh", expires_in: 60 } },
+    ])
+    await assert.rejects(refreshAccessToken(account, { fetchImpl }), (err) => err.signIn === undefined)
+    const next = await refreshAccessToken(account, { fetchImpl, now: 0 })
+    assert.deepEqual(next, { access: "new-access", refresh: "new-refresh", expires: 60_000 })
+    assert.equal(account.refresh, "old-refresh")
+  }
+})
+
+test("a successful OAuth rotation without a replacement refresh token expires the sign-in", async () => {
+  const { fetchImpl } = tokenServer([{ status: 200, json: { access_token: "rotated-access" } }])
+  await assert.rejects(
+    refreshAccessToken({ type: "oauth", refresh: "consumed-refresh" }, { fetchImpl }),
+    (err) => err.signIn === "expired",
+  )
+})
+
+test("malformed OAuth responses and network failures do not expire the sign-in", async () => {
+  const account = { type: "oauth", refresh: "old-refresh" }
+  for (const fetchImpl of [
+    async () => new Response("<html>unavailable</html>", { status: 503 }),
+    async () => new Response("{bad-json", { status: 200 }),
+    async () => { throw new TypeError("fetch failed") },
+  ]) {
+    await assert.rejects(refreshAccessToken(account, { fetchImpl }), (err) => err.signIn === undefined)
+  }
+})
+
+test("OAuth token requests honor both cancellation and their own deadline", async () => {
+  const fetchImpl = async (_url, { signal }) => new Promise((_resolve, reject) => {
+    if (signal.aborted) reject(signal.reason)
+    else signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+  })
+  const controller = new AbortController()
+  const deadline = exchangeToken("https://zenmux.ai", new URLSearchParams(), {
+    fetchImpl, signal: controller.signal, timeoutMs: 5,
+  })
+  const expired = assert.rejects(deadline, { name: "TimeoutError" })
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  await expired
+  const pending = exchangeToken("https://zenmux.ai", new URLSearchParams(), {
+    fetchImpl, signal: controller.signal,
+  })
+  controller.abort()
+  await assert.rejects(pending, { name: "AbortError" })
 })

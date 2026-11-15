@@ -3,9 +3,9 @@
 // ZenMux sells a monthly Builder Plan (Starter / Max / Ultra) instead of
 // pay-as-you-go credits. Chat works exactly like the pay-as-you-go API: an
 // OpenAI-compatible endpoint at https://zenmux.ai/api/v1, authenticated with a
-// subscription API key (prefix sk-ss-v1-). What a plain key cannot tell you is
+// subscription API key (prefix sk-subs-). What a plain key cannot tell you is
 // how much of the plan is left: that is GET /api/v1/management/subscription/detail
-// and it only accepts a Management API Key (prefix sk-mg-v1-, created at
+// and it only accepts a Management API Key (prefix sk-mgmt-, created at
 // https://zenmux.ai/platform/management).
 //
 // So one sign-in asks for both: the subscription key serves the requests, the
@@ -90,6 +90,12 @@ const DEFAULT_MODELS = {
 // fallback levels take over.
 let modelsDevCache = { file: "", mtime: 0, models: {} }
 
+function requestSignal(signal, timeoutMs = 30_000) {
+  signal?.throwIfAborted()
+  const deadline = AbortSignal.timeout(timeoutMs)
+  return signal ? AbortSignal.any([signal, deadline]) : deadline
+}
+
 function modelsDevModels(env = process.env) {
   for (const file of modelsDevCachePaths(env)) {
     try {
@@ -115,15 +121,15 @@ async function fetchModels(key, { signal } = {}) {
   const res = await fetch(`${API}/models`, {
     method: "GET",
     headers,
-    ...(signal ? { signal } : {}),
+    signal: requestSignal(signal),
   })
   if (!res.ok) {
     await res.body?.cancel().catch(() => {})
     throw Object.assign(new Error(`ZenMux answered HTTP ${res.status}`), { status: res.status })
   }
   const body = await res.json()
-  const data = Array.isArray(body?.data) ? body.data : []
-  return data
+  if (!Array.isArray(body?.data)) throw new Error("ZenMux sent a model catalogue magpie couldn't read")
+  return body.data
 }
 
 // The rich catalogue says which protocol each model speaks. It needs no key,
@@ -132,14 +138,18 @@ let catalogueCache = { at: 0, map: null }
 const CATALOGUE_TTL = 3600_000
 
 async function fetchProtocolMap({ signal } = {}) {
+  signal?.throwIfAborted()
   const now = Date.now()
   if (catalogueCache.map && now - catalogueCache.at < CATALOGUE_TTL) return catalogueCache.map
   const res = await fetch(`${PUBLIC_API}/frontend/model/available/list`, {
     method: "GET",
     headers: { accept: "application/json" },
-    ...(signal ? { signal } : {}),
+    signal: requestSignal(signal),
   })
-  if (!res.ok) throw new Error(`ZenMux answered HTTP ${res.status}`)
+  if (!res.ok) {
+    await res.body?.cancel().catch(() => {})
+    throw new Error(`ZenMux answered HTTP ${res.status}`)
+  }
   const body = await res.json()
   const map = protocolMap(body?.data)
   if (map.size) catalogueCache = { at: now, map }
@@ -231,10 +241,9 @@ async function chatProbe(key, model, { signal } = {}) {
       max_tokens: 1,
       stream: false,
     }),
-    ...(signal ? { signal } : {}),
+    signal: requestSignal(signal),
   })
-  const text = await res.text().catch(() => "")
-  await res.body?.cancel().catch(() => {})
+  const text = await res.text()
   return { status: res.status, ok: res.ok, text, message: messageOf(text) }
 }
 
@@ -248,30 +257,17 @@ async function chatProbe(key, model, { signal } = {}) {
 //   403            the key (or its permission) was refused — or, when the text
 //                  names a model, that model is outside this plan
 //   401            no key
-// So a 4xx that is not 401/403 proves the sign-in is good, even when no model
-// answers 200.
+// Only the listed statuses count as accepted. Network and server failures
+// cannot prove a key; try another model, then report a temporary failure.
 async function validateSubscriptionKey(key, { signal, served, models, probeModel } = {}) {
-  // Fast path: an unknown generation id is 404 and a wrong key 403, but never
-  // trust a 403 here — that is also what a good subscription key gets.
-  try {
-    const res = await fetch(`${MANAGEMENT_API}/generation?id=gen_magpie_signin_check`, {
-      method: "GET",
-      headers: { authorization: `Bearer ${key}`, accept: "application/json" },
-      ...(signal ? { signal } : {}),
-    })
-    await res.body?.cancel().catch(() => {})
-    if (res.status === 200 || res.status === 404 || res.status === 400) {
-      return { ok: true, via: "metering" }
-    }
-  } catch {
-    // Fall through to the chat probe, which reports network errors itself.
-  }
+  signal?.throwIfAborted()
 
   let catalogue = models
   if (!catalogue?.length) {
     try {
       catalogue = await fetchModels(key, { signal })
     } catch (e) {
+      signal?.throwIfAborted()
       return {
         ok: false,
         status: e?.status,
@@ -287,7 +283,14 @@ async function validateSubscriptionKey(key, { signal, served, models, probeModel
   let accepted = null
   let last = null
   for (const model of candidates) {
-    const res = await chatProbe(key, model, { signal })
+    let res
+    try {
+      res = await chatProbe(key, model, { signal })
+    } catch (e) {
+      signal?.throwIfAborted()
+      last = { network: true, message: `ZenMux unreachable: ${e?.cause?.code || e?.message || "network error"}` }
+      continue
+    }
     last = res
     if (res.status === 200) return { ok: true, via: "chat", model }
     if (res.status === 429 || res.status === 402) return { ok: true, via: "chat-throttled", model }
@@ -298,14 +301,18 @@ async function validateSubscriptionKey(key, { signal, served, models, probeModel
       return { ok: false, status: 403, message: res.message }
     }
     // 400 / 404 / 422: the key got through, the model or the body did not.
-    accepted = { model, status: res.status, message: res.message }
+    if ([400, 404, 422].includes(res.status)) {
+      accepted = { model, status: res.status, message: res.message }
+    }
   }
 
   if (accepted) return { ok: true, via: "probe-inconclusive", ...accepted }
   return {
     ok: false,
-    status: last?.status ?? 403,
-    message: last?.message || "ZenMux refused every model this account tried",
+    status: last?.status,
+    ...(last?.network ? { network: true } : {}),
+    temporary: !last || last.network === true || last.status !== 403,
+    message: last?.message || "ZenMux returned no chat model to verify this API key",
   }
 }
 
@@ -336,11 +343,11 @@ async function annotate(res) {
 }
 
 // effortLevelOf reads the level a caller asked for, wherever the client put it:
-// reasoning_effort, reasoning.effort, or the body's own "reasoningEffort" that a
-// variant passes along.
+// reasoning_effort, reasoning.effort, a native Messages output_config.effort,
+// or the body's own reasoningEffort.
 function effortLevelOf(body) {
   if (!isObj(body)) return undefined
-  for (const v of [body.reasoning_effort, body.reasoning?.effort, body.reasoningEffort]) {
+  for (const v of [body.reasoning_effort, body.reasoning?.effort, body.output_config?.effort, body.reasoningEffort]) {
     if (typeof v === "string" && v.trim()) return v.trim()
   }
   return undefined
@@ -351,6 +358,9 @@ function effortLevelOf(body) {
 // reports its tokens.
 async function request(key, input, init, { store = false, effort } = {}) {
   const headers = new Headers(init?.headers ?? {})
+  // Read the original selection before stripping magpie's private headers:
+  // the translated body may already have collapsed max/xhigh into high.
+  const selectedEffort = headers.get("x-magpie-effort")?.trim().toLowerCase()
   if (!headers.has("authorization")) headers.set("authorization", `Bearer ${key}`)
   headers.set("accept", headers.get("accept") ?? "application/json")
   // magpie adds its own routing headers (x-magpie-fallback, x-magpie-work-dir,
@@ -377,6 +387,14 @@ async function request(key, input, init, { store = false, effort } = {}) {
     }
     if (isObj(parsed)) {
       let changed = false
+      if (selectedEffort && /\/chat\/completions(?:[?#]|$)/.test(url)) {
+        parsed.reasoning_effort = selectedEffort
+        changed = true
+      }
+      if (selectedEffort && /\/responses(?:[?#]|$)/.test(url)) {
+        parsed.reasoning = { ...(isObj(parsed.reasoning) ? parsed.reasoning : {}), effort: selectedEffort }
+        changed = true
+      }
       // A streamed chat turn should still report its tokens.
       if (/\/chat\/completions(?:[?#]|$)/.test(url) && parsed.stream === true) {
         parsed.stream_options = {
@@ -395,20 +413,23 @@ async function request(key, input, init, { store = false, effort } = {}) {
       // thinking:{type:"adaptive"}, which throws away how hard the user asked
       // the model to think. Turn it back into the budget the level stands for,
       // unless the caller already sent one.
-      if (/\/messages(?:[?#]|$)/.test(url) && isObj(parsed.thinking)) {
-        const t = parsed.thinking
+      if (/\/messages(?:[?#]|$)/.test(url) && (isObj(parsed.thinking) || selectedEffort || effortLevelOf(parsed))) {
+        const t = isObj(parsed.thinking) ? parsed.thinking : {}
         const budget = Number(t.budget_tokens)
-        if (!(Number.isFinite(budget) && budget > 0) && (t.type === "adaptive" || t.type === "enabled" || t.type === undefined)) {
-          const level = effortLevelOf(parsed) ?? effort ?? "high"
+        const level = selectedEffort || effortLevelOf(parsed) || effort || "high"
+        if (String(level).toLowerCase() === "none") {
+          parsed.thinking = { type: "disabled" }
+          changed = true
+        } else if (!(Number.isFinite(budget) && budget > 0) && (t.type === "adaptive" || t.type === "enabled" || t.type === undefined)) {
           const tokens = budgetForLevel(level)
           // Anthropic wants the budget below max_tokens, and at least 1024.
           const max = Number(parsed.max_tokens)
-          const room = Number.isFinite(max) && max > 0 ? Math.max(1024, Math.floor(max * 0.8)) : tokens
+          const room = Number.isFinite(max) && max > 0
+            ? Math.min(Math.max(1024, Math.floor(max * 0.8)), Math.floor(max) - 1)
+            : tokens
           const use = Math.min(tokens, room)
-          if (use >= 1024) {
-            parsed.thinking = { type: "enabled", budget_tokens: use }
-            changed = true
-          }
+          parsed.thinking = use >= 1024 ? { type: "enabled", budget_tokens: use } : { type: "disabled" }
+          changed = true
         }
       }
       if (changed) {
@@ -425,9 +446,9 @@ async function fetchSubscription(managementKey, { signal } = {}) {
   const res = await fetch(`${MANAGEMENT_API}/subscription/detail`, {
     method: "GET",
     headers: { authorization: `Bearer ${managementKey}`, accept: "application/json" },
-    ...(signal ? { signal } : {}),
+    signal: requestSignal(signal),
   })
-  const text = await res.text().catch(() => "")
+  const text = await res.text()
   let body
   try {
     body = text ? JSON.parse(text) : undefined
@@ -445,14 +466,15 @@ const PLAN_TTL = 6 * 3600_000
 // (free / starter / pro / max / ultra) serves. It needs no key, so it also
 // lets chat-only users curate by `plan` without a Management API key.
 async function fetchPlanSets({ signal } = {}) {
+  signal?.throwIfAborted()
   const now = Date.now()
   if (planCache.sets && now - planCache.at < PLAN_TTL) return planCache.sets
   const res = await fetch(`${PUBLIC_API}/subscription/public/get_all_plans`, {
     method: "GET",
     headers: { accept: "application/json" },
-    ...(signal ? { signal } : {}),
+    signal: requestSignal(signal),
   })
-  const text = await res.text().catch(() => "")
+  const text = await res.text()
   if (!res.ok) throw new Error(`ZenMux answered HTTP ${res.status}`)
   let body
   try {
@@ -468,6 +490,7 @@ async function fetchPlanSets({ signal } = {}) {
 // planKeyFor says which plan this account is on: an explicit `plan` option
 // wins, else the Management API key's subscription detail.
 async function planKeyFor(auth, options, { signal } = {}) {
+  signal?.throwIfAborted()
   const forced = typeof options?.plan === "string" ? options.plan.trim().toLowerCase() : ""
   if (forced) return forced
   const managementKey = managementKeyOf(auth)
@@ -478,6 +501,7 @@ async function planKeyFor(auth, options, { signal } = {}) {
     const tier = isObj(body.data?.plan) && typeof body.data.plan.tier === "string" ? body.data.plan.tier : ""
     return tier.trim().toLowerCase()
   } catch {
+    signal?.throwIfAborted()
     return ""
   }
 }
@@ -492,22 +516,23 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
   const exclude = entries(options?.exclude ?? options?.notModels)
   const allModels = options?.allModels === true || options?.allModels === "true"
   const probeModelOption = typeof options?.probeModel === "string" ? options.probeModel.trim() : ""
-  // auto: each model on the best protocol it speaks (Messages > Responses >
-  // chat). chat: everything on chat completions, the safe whole-catalogue
-  // choice. responses / messages: force one, for a model set known to speak it.
+  // auto: follow the model's native protocol, keeping reasoning models off
+  // Messages when another protocol can carry their effort unchanged.
   const requested = typeof options?.protocol === "string" ? options.protocol.trim().toLowerCase() : "auto"
   const protocolOption =
     requested === "chat" || requested === "responses" || requested === "messages" ? requested : "auto"
   // Responses defaults to store:true — the conversation kept on ZenMux's side.
   const storeOption = options?.store === true || options?.store === "true"
-  // Which thinking budget an Anthropic request gets when the client's level is
-  // not visible any more (magpie collapsed it). "high" is the default because
-  // that is what magpie itself infers from a large budget.
+  // Fallback for a Messages request that carries no selected reasoning level.
   const effortOption =
     typeof options?.effort === "string" && options.effort.trim() ? options.effort.trim().toLowerCase() : "high"
-  // Off by default: an agent picks chat models, so a video or embedding model in
-  // the picker is a trap. Turn it on to see everything the plan serves.
+  // The full plan is visible by default; chat-only callers can hide non-chat
+  // endpoints with includeNonChat:false.
   const includeNonChat = options?.includeNonChat === undefined ? true : options.includeNonChat === true || options.includeNonChat === "true"
+  const allowedModel = (m) =>
+    (isChatModel(m) || (includeNonChat && isListableNonChat(m))) &&
+    (!include.length || include.some((pattern) => matches(m.id, pattern))) &&
+    !exclude.some((pattern) => matches(m.id, pattern))
 
   return {
     // The provider before anyone signs in. models.dev lists `zenmux` itself, so
@@ -527,7 +552,7 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
       provider: PROVIDER,
 
       // Switches in the provider's editor (Plugins → Installed → Options), also
-      // settable with `magpie plugin options zenmux '{"includeNonChat":false}'`.
+      // settable with `magpie plugin options <plugin-name> '{"includeNonChat":false}'`.
       options: [
         {
           key: "includeNonChat",
@@ -562,6 +587,7 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
                 const s = String(v ?? "").trim()
                 if (!s) return "ZenMux needs a subscription API key"
                 if (!ANY_KEY_RE.test(s)) return "That doesn't look like a ZenMux API key (sk-subs-… or sk-payg-…)"
+                if (MANAGEMENT_KEY_RE.test(s)) return "Use a subscription or pay-as-you-go key here; the Management API key goes in the next field"
                 return undefined
               },
             },
@@ -590,6 +616,9 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
             const email = String(inputs?.email ?? "").trim()
             if (!key) return { type: "failed", error: "ZenMux needs a subscription API key" }
             if (!ANY_KEY_RE.test(key)) return { type: "failed", error: "That doesn't look like a ZenMux API key (sk-subs-… or sk-payg-…)" }
+            if (MANAGEMENT_KEY_RE.test(key)) {
+              return { type: "failed", error: "Use a subscription or pay-as-you-go key here; the Management API key goes in the next field" }
+            }
             if (managementKey && !MANAGEMENT_KEY_RE.test(managementKey)) {
               return { type: "failed", error: "A ZenMux Management API key starts with sk-mgmt-" }
             }
@@ -597,10 +626,13 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
             // The subscription key. Only a real (one-token) request proves it:
             // the model lists are public and the management endpoints answer
             // 403 to a good subscription key as well.
-            const verdict = await validateSubscriptionKey(key, {
-              signal,
-              probeModel: probeModelOption,
-            })
+            let verdict
+            try {
+              verdict = await validateSubscriptionKey(key, { signal, probeModel: probeModelOption })
+            } catch (e) {
+              signal?.throwIfAborted()
+              return { type: "failed", error: `Could not verify this ZenMux API key: ${e?.message || "network error"}` }
+            }
             if (!verdict.ok) {
               const legacy = LEGACY_KEY_RE.test(key)
                 ? " — this key's sk-ss-v1- / sk-mg-v1- prefix was retired on 2026-11-10: create a new key"
@@ -611,6 +643,12 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
                   ? " — ZenMux gives this answer both for a bad key and for a key that may not make requests: check it is a subscription/pay-as-you-go key (not a Management key), created after 2026-11-10, on Starter or above (Free has no API access)"
                   : ""
               if (verdict.network) return { type: "failed", error: verdict.message }
+              if (verdict.temporary) {
+                return {
+                  type: "failed",
+                  error: `Could not verify this ZenMux API key${verdict.status ? ` (HTTP ${verdict.status})` : ""}: ${verdict.message}. Try again later`,
+                }
+              }
               return {
                 type: "failed",
                 error: `ZenMux refused this API key (HTTP ${verdict.status})${verdict.message ? `: ${verdict.message.slice(0, 300)}` : ""}${legacy}${hint}`,
@@ -630,6 +668,7 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
                   return { type: "failed", error: `ZenMux Management API: ${why.slice(0, 300)}` }
                 }
               } catch (e) {
+                signal?.throwIfAborted()
                 if (e?.status === 401 || e?.status === 403) {
                   return { type: "failed", error: `ZenMux refused the Management API key (HTTP ${e.status})` }
                 }
@@ -749,7 +788,8 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
 
       // magpie's own hook: how much of the Builder Plan is left. Runs in the
       // account's scope, so a refreshed token would be saved to this account.
-      async usage(getAuth) {
+      async usage(getAuth, provider, { signal } = {}) {
+        signal?.throwIfAborted()
         const auth = await getAuth()
         const key = bearerOf(auth)
         const managementKey = managementKeyOf(auth)
@@ -765,9 +805,10 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
 
         let res
         try {
-          res = await fetchSubscription(managementKey)
+          res = await fetchSubscription(managementKey, { signal })
         } catch (e) {
-          return { windows: [], error: `ZenMux unreachable: ${e?.cause?.code || e?.message || "network error"}` }
+          signal?.throwIfAborted()
+          return { windows: [], signIn: "kept", error: `ZenMux unreachable: ${e?.cause?.code || e?.message || "network error"}` }
         }
 
         if (res.status === 401 || res.status === 403) {
@@ -790,7 +831,9 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
           return { windows: [], signIn: "kept", error: `ZenMux did not return the subscription details${why ? `: ${why}` : ""}` }
         }
 
-        return subscriptionToUsage(res.body.data)
+        // A healthy Management key does not prove that the separate inference
+        // key/token works, so a quota read must not clear its expired state.
+        return { ...subscriptionToUsage(res.body.data), signIn: "kept" }
       },
     },
 
@@ -799,7 +842,8 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
     // list says which ones exist (and which the plan may use right now).
     provider: {
       id: PROVIDER,
-      async models(provider, { auth } = {}) {
+      async models(provider, { auth, signal } = {}) {
+        signal?.throwIfAborted()
         // models.dev's entries (the host builds them from its catalogue) are
         // the base; DEFAULT_MODELS is only for a host with no catalogue.
         const merged = isObj(provider?.models) ? provider.models : {}
@@ -811,17 +855,26 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
 
         let live
         try {
-          live = await fetchModels(key)
+          live = await fetchModels(key, { signal })
         } catch (e) {
+          signal?.throwIfAborted()
           if (e?.status === 401 || e?.status === 403) {
             throw Object.assign(new Error(`ZenMux refused this account's API key (HTTP ${e.status}); sign in again`), {
               signIn: "expired",
             })
           }
-          // ZenMux is down: keep the list magpie already had.
-          return base
+          // Keep known models on an outage, while still respecting explicit
+          // include/exclude and chat-only options.
+          const fallback = Object.fromEntries(Object.entries(base).filter(([id, m]) => allowedModel({
+            id,
+            output_modalities: isObj(m.capabilities?.output)
+              ? Object.keys(m.capabilities.output).filter((kind) => m.capabilities.output[kind] === true)
+              : m.modalities?.output ?? ["text"],
+          })))
+          fallback[Symbol.for("magpie.fellBack")] = true
+          return fallback
         }
-        if (!live.length) return base
+        if (!live.length) return {}
 
         // A Builder Plan spends Flows, not dollars, so those models carry no
         // per-token price. An OAuth account is a ZenMux account too: treat it as
@@ -831,12 +884,13 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
         // Only the models this account's plan serves, when we can tell which
         // plan that is: ZenMux answers 403 for a model outside it.
         let served = null
-        if (key && !allModels) {
-          const planKey = await planKeyFor(auth, options)
+        if (!allModels) {
+          const planKey = await planKeyFor(auth, options, { signal })
           if (planKey) {
             try {
-              served = (await fetchPlanSets()).get(planKey) ?? null
+              served = (await fetchPlanSets({ signal })).get(planKey) ?? null
             } catch {
+              signal?.throwIfAborted()
               served = null
             }
           }
@@ -851,8 +905,9 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
         let protocols = null
         if (protocolOption === "auto") {
           try {
-            protocols = await fetchProtocolMap()
+            protocols = await fetchProtocolMap({ signal })
           } catch {
+            signal?.throwIfAborted()
             protocols = null
           }
         }
@@ -867,11 +922,8 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
         const build = (filter) => {
           const out = {}
           for (const m of live) {
-            if (!isChatModel(m) && !includeNonChat) continue
-            if (!isChatModel(m) && !isListableNonChat(m)) continue
+            if (!allowedModel(m)) continue
             if (filter && !filter.has(m.id)) continue
-            if (include.length && !include.some((p) => matches(m.id, p))) continue
-            if (exclude.length && exclude.some((p) => matches(m.id, p))) continue
             out[m.id] = modelRow(m, base?.[m.id], {
               subscription,
               api: apiOf(m.id),
@@ -882,28 +934,9 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
           return out
         }
 
-        let models = build(served)
-        // A plan list that shares nothing with the live list is not a reason
-        // to show an empty picker.
-        if (served && !Object.keys(models).length) models = build(null)
-        if (!Object.keys(models).length) return base
-
-        // A model the user asked for by name that the live list didn't have
-        // still gets a row, so a curated option list never silently loses one.
-        for (const pattern of include) {
-          if (models[pattern] || pattern.includes("*") || pattern.endsWith("/")) continue
-          const known = base?.[pattern]
-          const one = live.find((m) => m.id === pattern)
-          if (one) {
-            models[pattern] = modelRow(one, known, {
-              subscription,
-              api: apiOf(one.id),
-              protocol: protocolOf(one.id),
-              dev: dev[one.id],
-            })
-          }
-        }
-        return models
+        // An empty result is a valid answer: a restrictive option or plan
+        // must never re-enable models the user or vendor excluded.
+        return build(served)
       },
     },
   }
@@ -911,6 +944,7 @@ export const ZenMuxBuilderAuthPlugin = async (input, pluginOptions) => {
 
 export const _internal = {
   request,
+  requestSignal,
   annotate,
   isKeyRefusal,
   validateSubscriptionKey,

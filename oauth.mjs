@@ -99,14 +99,15 @@ export async function exchangeToken(
   body,
   { fetchImpl = fetch, signal, timeoutMs = 30_000 } = {},
 ) {
-  const signalOrTimeout = signal ?? AbortSignal.timeout(timeoutMs)
+  const deadline = AbortSignal.timeout(timeoutMs)
+  const signalOrTimeout = signal ? AbortSignal.any([signal, deadline]) : deadline
   const res = await fetchImpl(`${String(origin).replace(/\/+$/, "")}/oauth/token`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/x-www-form-urlencoded" },
     body,
     signal: signalOrTimeout,
   })
-  const text = await res.text().catch(() => "")
+  const text = await res.text()
   let payload
   try {
     payload = JSON.parse(text)
@@ -131,6 +132,7 @@ export async function beginAuthorization({
   completionHtml = completionPage(),
   signal,
 } = {}) {
+  signal?.throwIfAborted()
   const { verifier, challenge } = createPkce(random)
   const state = base64Url(random(32))
 
@@ -143,11 +145,12 @@ export async function beginAuthorization({
   settled.catch(() => {}) // observed below; a cancel must not surface as unhandled
 
   let done = false
+  let timer
   const finish = (fn, value) => {
     if (done) return false
     done = true
-    clearTimeout(timer)
     fn(value)
+    close()
     return true
   }
 
@@ -170,18 +173,17 @@ export async function beginAuthorization({
       response.writeHead(409).end("this sign-in is over")
       return
     }
-    if (params.get("error")) {
-      response.writeHead(400, { "content-type": "text/plain; charset=utf-8" })
-      response.end("ZenMux authorization failed. You can close this window.")
-      finish(settleReject, new Error(`ZenMux returned ${params.get("error")}`))
-      close()
-      return
-    }
     if (params.get("state") !== state) {
       // A stale or forged callback: answer 400 but keep listening, because the
       // real browser redirect may still arrive.
       response.writeHead(400, { "content-type": "text/plain; charset=utf-8" })
       response.end("state mismatch")
+      return
+    }
+    if (params.get("error")) {
+      response.writeHead(400, { "content-type": "text/plain; charset=utf-8" })
+      response.end("ZenMux authorization failed. You can close this window.")
+      finish(settleReject, new Error(`ZenMux returned ${params.get("error")}`))
       return
     }
     const code = params.get("code")
@@ -193,7 +195,6 @@ export async function beginAuthorization({
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" })
     response.end(completionHtml)
     finish(settleResolve, { code, redirectUri })
-    close()
   })
 
   await new Promise((resolve, reject) => {
@@ -208,6 +209,8 @@ export async function beginAuthorization({
   const redirectUri = `http://${redirectHost}:${address.port}${CALLBACK_PATH}`
 
   const close = () => {
+    clearTimeout(timer)
+    signal?.removeEventListener?.("abort", onAbort)
     try {
       server.close()
     } catch {
@@ -215,23 +218,25 @@ export async function beginAuthorization({
     }
   }
 
-  const timer = setTimeout(() => {
+  timer = setTimeout(() => {
     finish(settleReject, new Error("ZenMux authorization was not completed in five minutes"))
-    close()
   }, timeoutMs)
   timer.unref?.()
 
   const onAbort = () => {
     finish(settleReject, new Error("ZenMux authorization was cancelled"))
-    close()
   }
   signal?.addEventListener?.("abort", onAbort, { once: true })
+  if (signal?.aborted) onAbort()
 
   return {
     url: authorizeUrl({ origin, clientId, redirectUri, state, challenge, scope }),
     redirectUri,
     state,
-    close,
+    close() {
+      finish(settleReject, new Error("ZenMux authorization was cancelled"))
+      close()
+    },
     async complete() {
       try {
         const { code } = await settled
@@ -240,7 +245,7 @@ export async function beginAuthorization({
           exchangeBody({ kind: "code", clientId, code, redirectUri, verifier }),
           { fetchImpl, signal },
         )
-        const auth = toAuth(res.payload)
+        const auth = res.ok ? toAuth(res.payload) : undefined
         if (!auth) {
           const why = res.payload?.error_description || res.payload?.error || `HTTP ${res.status}`
           throw new Error(`ZenMux did not return a usable token pair: ${why}`)
@@ -254,7 +259,8 @@ export async function beginAuthorization({
 }
 
 // refreshAccessToken renews an account. ZenMux rotates the refresh token, so the
-// new pair must be saved; a response without one means the sign-in is dead.
+// new pair must be saved. Only a refused refresh grant or an otherwise
+// successful rotation without its replacement token ends the sign-in.
 export async function refreshAccessToken(
   auth,
   { origin = DEFAULT_ORIGIN, clientId = DEFAULT_CLIENT_ID, fetchImpl = fetch, signal, now = Date.now() } = {},
@@ -265,15 +271,18 @@ export async function refreshAccessToken(
     exchangeBody({ kind: "refresh", clientId, refresh: auth.refresh }),
     { fetchImpl, signal },
   )
-  const next = toAuth(res.payload, typeof now === "function" ? now() : now)
+  const next = res.ok ? toAuth(res.payload, typeof now === "function" ? now() : now) : undefined
   if (!next) {
+    const expired =
+      ([400, 401, 403].includes(res.status) && res.payload?.error === "invalid_grant") ||
+      (res.ok && typeof res.payload?.access_token === "string" && !!res.payload.access_token && !res.payload.refresh_token)
     throw Object.assign(
       new Error(
         `ZenMux did not renew this sign-in${
           res.payload?.error_description || res.payload?.error ? `: ${res.payload.error_description || res.payload.error}` : ` (HTTP ${res.status})`
         }`,
       ),
-      { signIn: "expired" },
+      { status: res.status, ...(expired ? { signIn: "expired" } : {}) },
     )
   }
   return next

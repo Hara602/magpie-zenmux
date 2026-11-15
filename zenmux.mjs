@@ -18,6 +18,8 @@ export const EFFORTS = Object.freeze({
   low: Object.freeze({}),
   medium: Object.freeze({}),
   high: Object.freeze({}),
+  xhigh: Object.freeze({}),
+  max: Object.freeze({}),
 })
 
 // A level an agent can pick is a plain word; anything else in a vendor's list
@@ -48,11 +50,8 @@ export function modelsDevLevels(dev) {
 //
 // magpie forwards a variant's reasoningEffort to the right place per protocol
 // (reasoning.effort on Responses, reasoning_effort on chat), so the plugin puts
-// the vendor's level there verbatim and lets the protocol carry it.
-export const PROTOCOL_EFFORTS = Object.freeze({
-  chat: ["none", "minimal", "low", "medium", "high", "max"],
-  responses: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
-})
+// the vendor's level there verbatim and lets the protocol carry it. The
+// protocol itself does not say which levels an individual model supports.
 
 // Anthropic thinking budgets, in tokens, for each level a client may pick. The
 // Messages protocol has no effort names: a budget is the only way to say how
@@ -70,9 +69,7 @@ export const THINKING_BUDGETS = Object.freeze({
   ultra: 32768,
 })
 
-// budgetForLevel turns a level name into a thinking budget. A name we do not
-// know gets the highest we have rather than nothing: a client that asked for its
-// top level did not ask for adaptive.
+// A missing or unknown level uses the default high budget.
 export function budgetForLevel(level) {
   const l = String(level ?? "").trim().toLowerCase()
   if (THINKING_BUDGETS[l] !== undefined) return THINKING_BUDGETS[l]
@@ -83,19 +80,17 @@ export function budgetForLevel(level) {
 // named level is offered with the vendor's own parameter; nothing is renamed
 // and nothing is dropped, because a name the vendor supports but we did not
 // list would show up as "the level I picked did nothing".
-export function variantsForProtocol(protocol, levels) {
+export function variantsForProtocol(protocol, levels = []) {
   // Messages has no effort name: it takes a thinking budget (or, where the
   // vendor documents it, output_config.effort), and magpie collapses whatever a
   // client asks for into thinking:{type:"adaptive"}, which this plugin turns
   // back into a budget on the way out. So the named levels stay as they are.
   if (protocol === "messages") return undefined
-  const allowed = PROTOCOL_EFFORTS[protocol]
-  if (!allowed) return undefined
-  const wanted = Array.isArray(levels) && levels.length ? levels : allowed
+  if (protocol !== "chat" && protocol !== "responses") return undefined
   const out = {}
-  for (const level of wanted) {
+  for (const level of Array.isArray(levels) ? levels : []) {
     const l = String(level ?? "").trim().toLowerCase()
-    if (!l || out[l]) continue
+    if (!LEVEL_RE.test(l) || Object.hasOwn(out, l)) continue
     out[l] = { reasoningEffort: l }
   }
   return Object.keys(out).length ? out : undefined
@@ -340,7 +335,7 @@ export function isChatModel(m) {
 // is the catalogue entry itself, which still carries the reasoning levels
 // models.dev names for the model. The live ZenMux entry only fills what
 // models.dev leaves unsaid. A model models.dev does not know is built from the
-// live entry, with our three fallback levels when it reasons.
+// live entry, with our five fallback levels when it reasons.
 export function modelRow(m, base = {}, { subscription = false, api, dev, protocol } = {}) {
   const b = isObj(base) ? base : {}
   const d = isObj(dev) ? dev : undefined
@@ -422,19 +417,19 @@ export function modelRow(m, base = {}, { subscription = false, api, dev, protoco
   // models.dev does not know — or for one whose entry predates the
   // reasoning_options field, when it says nothing of levels at all.
   const baseVariants = isObj(b.variants) && Object.keys(b.variants).length ? b.variants : undefined
+  const declaredVariants = baseVariants ?? modelsDevVariants(d)
   const levelsSaid = known && Array.isArray(d.reasoning_options)
   // The levels the vendor names, in magpie's spelling, before we translate them
   // to what the protocol under this model can actually be sent.
-  const named = baseVariants ? Object.keys(baseVariants) : undefined
-  const devLevels = known ? modelsDevLevels(d) : []
-  const levels = named ?? (devLevels.length ? devLevels : undefined)
+  const levels = declaredVariants
+    ? Object.keys(declaredVariants)
+    : reasoning && !levelsSaid ? Object.keys(EFFORTS) : []
   // magpie swaps a level for the vendor parameter only when the variant says
   // so; without it, "xhigh"/"max" get clamped to high on the way out.
   const protocolVariants = reasoning ? variantsForProtocol(protocol, levels) : undefined
   const variants =
     protocolVariants ??
-    baseVariants ??
-    modelsDevVariants(d) ??
+    declaredVariants ??
     (reasoning && !levelsSaid ? EFFORTS : undefined)
 
   // A Builder Plan draws Flows, not dollars: leave cost off for subscription

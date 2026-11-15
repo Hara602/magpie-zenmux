@@ -181,7 +181,7 @@ test("modelRow keeps capabilities nested and drops dollars for a plan", () => {
   assert.equal(plan.capabilities.toolcall, true)
   assert.equal(plan.capabilities.attachment, true)
   assert.equal(plan.capabilities.input.file, true)
-  assert.deepEqual(Object.keys(plan.variants), ["low", "medium", "high"])
+  assert.deepEqual(Object.keys(plan.variants), ["low", "medium", "high", "xhigh", "max"])
   assert.equal(plan.api.npm, "n")
   assert.equal(plan.release_date, "2026-10-17")
   assert.equal(plan.cost, undefined) // a Builder Plan spends Flows
@@ -190,10 +190,16 @@ test("modelRow keeps capabilities nested and drops dollars for a plan", () => {
   assert.deepEqual(payg.cost, { input: 0.5, output: 2 })
 })
 
-test("modelRow falls back to our levels when models.dev's are empty", () => {
+test("modelRow exposes all five fallback levels when level metadata is missing", () => {
   const live = { id: "x/y", display_name: "Y", capabilities: { reasoning: true }, output_modalities: ["text"] }
-  const row = modelRow(live, { variants: {}, id: "x/y" })
-  assert.deepEqual(Object.keys(row.variants), ["low", "medium", "high"])
+  for (const protocol of [undefined, "chat", "responses", "messages"]) {
+    const row = modelRow(live, { variants: {}, id: "x/y" }, { protocol })
+    assert.deepEqual(Object.keys(row.variants), ["low", "medium", "high", "xhigh", "max"])
+    if (protocol === "chat" || protocol === "responses") {
+      assert.equal(row.variants.xhigh.reasoningEffort, "xhigh")
+      assert.equal(row.variants.max.reasoningEffort, "max")
+    }
+  }
 })
 
 test("matches understands exact ids, globs and vendor prefixes", () => {
@@ -311,9 +317,9 @@ test("variantsForProtocol sends the vendor's own level names verbatim", () => {
   assert.deepEqual(Object.keys(resp), ["low", "high", "max"])
   assert.equal(resp.max.reasoningEffort, "max")
 
-  // Without declared levels, the protocol's own vocabulary is offered.
-  assert.ok(Object.keys(variantsForProtocol("responses")).includes("xhigh"))
-  assert.deepEqual(Object.keys(variantsForProtocol("chat")), ["none", "minimal", "low", "medium", "high", "max"])
+  // The transport cannot invent levels that the model never declared.
+  assert.equal(variantsForProtocol("responses"), undefined)
+  assert.equal(variantsForProtocol("chat", []), undefined)
 
   // Messages has no effort names; the named levels are left alone and the
   // collapsed "adaptive" becomes a budget on the way out (see below).
@@ -438,12 +444,17 @@ test("validateSubscriptionKey: a 200 chat request proves the key", async () => {
   }
 })
 
-test("validateSubscriptionKey: the management metering 404 is a fast yes", async () => {
+test("validateSubscriptionKey: management endpoints cannot prove inference access", async () => {
   const { validateSubscriptionKey } = _internal
-  const restore = stubFetch(() => ({ status: 404, text: "{}" }))
+  const paths = []
+  const restore = stubFetch((url) => {
+    paths.push(new URL(url).pathname)
+    return { status: 404, text: "{}" }
+  })
   try {
     const v = await validateSubscriptionKey("sk-subs-x", { models: MODELS })
-    assert.deepEqual([v.ok, v.via], [true, "metering"])
+    assert.deepEqual([v.ok, v.via], [true, "probe-inconclusive"])
+    assert.deepEqual(paths, ["/api/v1/chat/completions"])
   } finally {
     restore()
   }
@@ -705,7 +716,7 @@ test("modelRow gives no levels where models.dev names none", () => {
     context_length: 64000,
     max_tokens: 2048,
   }
-  const row = modelRow(live, {}, { subscription: true, dev: DEV_TOGGLE })
+  const row = modelRow(live, {}, { subscription: true, dev: DEV_TOGGLE, protocol: "chat" })
   assert.equal(row.reasoning, true)
   assert.equal(row.variants, undefined) // a toggle has no levels to pick
   assert.equal(row.name, "Toggle Only")
@@ -717,8 +728,9 @@ test("modelRow keeps the config's own variants over models.dev's", () => {
   const row = modelRow(LIVE_KIMI, { ...BASE_KIMI, variants: { low: {} } }, {
     subscription: true,
     dev: DEV_KIMI,
+    protocol: "chat",
   })
-  assert.deepEqual(row.variants, { low: {} })
+  assert.deepEqual(row.variants, { low: { reasoningEffort: "low" } })
 })
 
 test("modelsDevCachePaths finds magpie's models.dev snapshot", () => {
@@ -816,8 +828,8 @@ test("models hook aligns every row with models.dev", async () => {
     const unknown = rows["new/model"]
     assert.ok(unknown)
     assert.equal(unknown.name, "New Model")
-    // chat-routed, so the levels are the ones chat completions can be sent
-    assert.deepEqual(Object.keys(unknown.variants), ["none", "minimal", "low", "medium", "high", "max"])
+    // Unknown reasoning models use the five configured fallback levels.
+    assert.deepEqual(Object.keys(unknown.variants), ["low", "medium", "high", "xhigh", "max"])
   } finally {
     restore()
     if (saved.HOME === undefined) delete process.env.HOME
@@ -884,11 +896,303 @@ test("modelRow keeps our levels when a models.dev entry predates reasoning_optio
   // a snapshot from before models.dev named levels: the entry exists, says it
   // reasons, and says nothing of which levels
   const dev = { id: "x/old-entry", name: "Old Entry", reasoning: true, tool_call: true }
-  const row = modelRow(live, {}, { dev, subscription: true })
+  const row = modelRow(live, {}, { dev, subscription: true, protocol: "chat" })
   assert.equal(row.reasoning, true)
-  assert.deepEqual(Object.keys(row.variants), ["low", "medium", "high"])
+  assert.deepEqual(Object.keys(row.variants), ["low", "medium", "high", "xhigh", "max"])
 
   // ...but an entry that names "toggle only" is an answer: no levels offered
   const toggle = { ...dev, reasoning_options: [{ type: "toggle" }] }
-  assert.equal(modelRow(live, {}, { dev: toggle }).variants, undefined)
+  assert.equal(modelRow(live, {}, { dev: toggle, protocol: "chat" }).variants, undefined)
+})
+
+test("modelRow offers only the model's declared levels on each real route", () => {
+  for (const protocol of ["chat", "responses", "messages"]) {
+    const row = modelRow(LIVE_DEEPSEEK, BASE_DEEPSEEK, { dev: DEV_DEEPSEEK, protocol })
+    assert.deepEqual(Object.keys(row.variants), ["low", "high", "max"])
+    if (protocol !== "messages") assert.equal(row.variants.max.reasoningEffort, "max")
+
+    const toggle = modelRow(LIVE_DEEPSEEK, {}, { dev: DEV_TOGGLE, protocol })
+    assert.equal(toggle.variants, undefined)
+
+    const legacy = modelRow(LIVE_DEEPSEEK, {}, {
+      dev: { reasoning: true, variants: { high: {}, max: {} } },
+      protocol,
+    })
+    assert.deepEqual(Object.keys(legacy.variants), ["high", "max"])
+  }
+})
+
+test("selected effort survives protocol translation and private headers stay local", async () => {
+  const calls = []
+  const restore = stubFetch((url, init) => {
+    calls.push({ url, body: JSON.parse(init.body), headers: new Headers(init.headers) })
+    return { status: 200, text: "{}" }
+  })
+  try {
+    for (const level of ["low", "high", "max", "xhigh"]) {
+      for (const path of ["chat/completions", "responses", "messages"]) {
+        await _internal.request("fake", `https://zenmux.ai/api/v1/${path}`, {
+          method: "POST",
+          headers: { "x-magpie-effort": level, "x-magpie-work-dir": "/private/project" },
+          body: JSON.stringify({
+            max_tokens: 65536,
+            reasoning_effort: "high",
+            reasoning: { effort: "high", summary: "auto" },
+            thinking: { type: "adaptive" },
+            messages: [],
+          }),
+        })
+        const sent = calls.at(-1)
+        assert.ok(![...sent.headers.keys()].some((name) => name.startsWith("x-magpie-")))
+        if (path === "messages") {
+          assert.equal(sent.body.thinking.budget_tokens, budgetForLevel(level))
+        } else if (path === "responses") {
+          assert.equal(sent.body.reasoning.effort, level)
+          assert.equal(sent.body.reasoning.summary, "auto")
+        } else {
+          assert.equal(sent.body.reasoning_effort, level)
+        }
+      }
+    }
+  } finally {
+    restore()
+  }
+})
+
+test("Messages thinking stays valid for small output limits and none disables it", async () => {
+  let sent
+  const restore = stubFetch((_url, init) => {
+    sent = JSON.parse(init.body)
+    return { status: 200, text: "{}" }
+  })
+  try {
+    for (const max of [1, 16, 1024, 1025, 1200, 65536]) {
+      await _internal.request("fake", "https://zenmux.ai/api/anthropic/v1/messages", {
+        method: "POST",
+        headers: { "x-magpie-effort": "max" },
+        body: JSON.stringify({ max_tokens: max, thinking: { type: "adaptive" }, messages: [] }),
+      })
+      if (max <= 1024) assert.deepEqual(sent.thinking, { type: "disabled" })
+      else assert.ok(sent.thinking.budget_tokens >= 1024 && sent.thinking.budget_tokens < max)
+    }
+    await _internal.request("fake", "https://zenmux.ai/api/anthropic/v1/messages", {
+      method: "POST",
+      headers: { "x-magpie-effort": "none" },
+      body: JSON.stringify({ max_tokens: 65536, thinking: { type: "adaptive" }, messages: [] }),
+    })
+    assert.deepEqual(sent.thinking, { type: "disabled" })
+
+    await _internal.request("fake", "https://zenmux.ai/api/anthropic/v1/messages", {
+      method: "POST",
+      body: JSON.stringify({ max_tokens: 65536, output_config: { effort: "max" }, messages: [] }),
+    })
+    assert.equal(sent.thinking.budget_tokens, 32768)
+  } finally {
+    restore()
+  }
+})
+
+test("login cannot succeed on server failures, network errors or an empty catalogue", async () => {
+  for (const failure of [500, 502, 503, "network", "empty"]) {
+    const restore = stubFetch((url) => {
+      if (url.endsWith("/models")) {
+        return { status: 200, text: JSON.stringify({ data: failure === "empty" ? [] : MODELS }) }
+      }
+      if (failure === "network") throw new TypeError("fetch failed")
+      return { status: failure, text: '{"error":{"message":"upstream unavailable"}}' }
+    })
+    try {
+      const plugin = await ZenMuxBuilderAuthPlugin({}, {})
+      const result = await plugin.auth.methods[0].authorize({ key: "sk-subs-review-fake-key" })
+      assert.equal(result.type, "failed", String(failure))
+      assert.doesNotMatch(result.error, /refused this API key/i)
+    } finally {
+      restore()
+    }
+  }
+})
+
+test("login retries another model after a transient inference failure", async () => {
+  let calls = 0
+  const restore = stubFetch(() => {
+    calls++
+    return { status: calls === 1 ? 503 : 200, text: "{}" }
+  })
+  try {
+    const result = await _internal.validateSubscriptionKey("fake", {
+      models: [...MODELS, { id: "review/another", output_modalities: ["text"] }],
+    })
+    assert.equal(result.ok, true)
+    assert.equal(result.via, "chat")
+    assert.equal(calls, 2)
+  } finally {
+    restore()
+  }
+})
+
+test("a Management key in the inference field is rejected before making requests", async () => {
+  const restore = stubFetch(() => { assert.fail("must not send a Management key as an inference key") })
+  try {
+    const plugin = await ZenMuxBuilderAuthPlugin({}, {})
+    const method = plugin.auth.methods[0]
+    assert.match(method.prompts[0].validate("sk-mgmt-review-fake-key"), /next field/)
+    const result = await method.authorize({ key: "sk-mgmt-review-fake-key" })
+    assert.equal(result.type, "failed")
+    assert.match(result.error, /next field/)
+  } finally {
+    restore()
+  }
+})
+
+test("model filters keep exclusions, plan limits and empty results authoritative", async () => {
+  const live = [
+    { id: "review/allowed", output_modalities: ["text"] },
+    { id: "review/excluded", output_modalities: ["text"] },
+    { id: "review/image", output_modalities: ["image"] },
+  ]
+  const restore = stubFetch((url) => ({
+    status: 200,
+    text: JSON.stringify({
+      data: url.endsWith("/models") ? live : [
+        { planKey: "review-plan", models: [{ model_slug: "review/allowed" }] },
+        { planKey: "review-empty", models: [] },
+      ],
+    }),
+  }))
+  const base = { models: { "review/allowed": { id: "review/allowed" } } }
+  const cases = [
+    [{ models: ["review/allowed", "review/excluded"], exclude: ["review/excluded"] }, ["review/allowed"]],
+    [{ exclude: ["*"] }, []],
+    [{ models: ["missing/model"] }, []],
+    [{ includeNonChat: false, models: ["review/allowed", "review/image"] }, ["review/allowed"]],
+    [{ plan: "review-plan", models: ["review/excluded"] }, []],
+    [{ plan: "review-empty" }, []],
+    [{ plan: "review-plan" }, ["review/allowed"]],
+    [{ plan: "review-plan", allModels: true, includeNonChat: false }, ["review/allowed", "review/excluded"]],
+  ]
+  try {
+    for (const [options, expected] of cases) {
+      const plugin = await ZenMuxBuilderAuthPlugin({}, { ...options, protocol: "chat" })
+      const rows = await plugin.provider.models(base, { auth: { type: "api", key: "sk-subs-fake" } })
+      assert.deepEqual(Object.keys(rows), expected, JSON.stringify(options))
+    }
+    const signedOut = await ZenMuxBuilderAuthPlugin({}, { plan: "review-plan", protocol: "chat" })
+    assert.deepEqual(Object.keys(await signedOut.provider.models(base)), ["review/allowed"])
+  } finally {
+    restore()
+  }
+})
+
+test("catalogue outages preserve known models but still apply explicit filters", async () => {
+  const restore = stubFetch(() => { throw new TypeError("fetch failed") })
+  try {
+    const plugin = await ZenMuxBuilderAuthPlugin({}, { exclude: ["review/excluded"] })
+    const rows = await plugin.provider.models({
+      models: {
+        "review/allowed": { id: "review/allowed" },
+        "review/excluded": { id: "review/excluded" },
+      },
+    })
+    assert.deepEqual(Object.keys(rows), ["review/allowed"])
+    assert.equal(rows[Symbol.for("magpie.fellBack")], true)
+  } finally {
+    restore()
+  }
+})
+
+test("a successful empty catalogue stays empty", async () => {
+  const restore = stubFetch(() => ({ status: 200, text: '{"data":[]}' }))
+  try {
+    const plugin = await ZenMuxBuilderAuthPlugin({}, {})
+    assert.deepEqual(await plugin.provider.models({ models: { "review/old": {} } }), {})
+  } finally {
+    restore()
+  }
+})
+
+test("model, quota, protocol and plan requests all receive cancellation signals", async () => {
+  const controller = new AbortController()
+  const calls = []
+  const restore = stubFetch((url, init) => {
+    calls.push({ url, signal: init.signal })
+    const data = url.endsWith("/models") ? MODELS
+      : url.includes("/subscription/detail") ? { plan: { tier: "review-plan" } }
+      : url.includes("/get_all_plans") ? [{ planKey: "review-plan", models: [{ model_slug: MODELS[0].id }] }]
+      : []
+    return { status: 200, text: JSON.stringify({ success: true, data }) }
+  })
+  try {
+    const { ZenMuxBuilderAuthPlugin: SignalPlugin } = await import("../index.mjs?cancellation-regression")
+    const plugin = await SignalPlugin({}, {})
+    const auth = { type: "api", key: "sk-subs-fake", metadata: { managementKey: "sk-mgmt-fake" } }
+    await plugin.provider.models({ models: {} }, { auth, signal: controller.signal })
+    await plugin.auth.usage(async () => auth, {}, { signal: controller.signal })
+    assert.ok(calls.some((call) => call.url.includes("/get_all_plans")))
+    assert.ok(calls.some((call) => call.url.includes("/frontend/model/available/list")))
+    assert.ok(calls.every((call) => call.signal instanceof AbortSignal))
+    controller.abort()
+    assert.ok(calls.every((call) => call.signal.aborted))
+  } finally {
+    restore()
+  }
+})
+
+test("cancelled model and quota requests propagate cancellation rather than falling back", async () => {
+  const original = globalThis.fetch
+  globalThis.fetch = async (_url, { signal }) => {
+    signal.throwIfAborted()
+    return new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true })
+    })
+  }
+  try {
+    const plugin = await ZenMuxBuilderAuthPlugin({}, {})
+    const auth = { key: "fake", metadata: { managementKey: "fake" } }
+    for (const call of [
+      (signal) => plugin.provider.models({ models: {} }, { auth, signal }),
+      (signal) => plugin.auth.usage(async () => auth, {}, { signal }),
+      (signal) => plugin.auth.methods[0].authorize({ key: "sk-subs-review-fake-key" }, { signal }),
+    ]) {
+      const controller = new AbortController()
+      const pending = call(controller.signal)
+      await new Promise((resolve) => setImmediate(resolve))
+      controller.abort()
+      await assert.rejects(pending, { name: "AbortError" })
+      await assert.rejects(call(controller.signal), { name: "AbortError" })
+    }
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+test("request deadlines remain active alongside a host signal", async () => {
+  const controller = new AbortController()
+  const signal = _internal.requestSignal(controller.signal, 5)
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  assert.equal(signal.aborted, true)
+  assert.equal(signal.reason.name, "TimeoutError")
+  assert.equal(controller.signal.aborted, false)
+})
+
+test("Management quota reads never change the independent inference sign-in", async () => {
+  for (const failure of [null, 401, 403, 503, "network"]) {
+    const restore = stubFetch(() => {
+      if (failure === "network") throw new TypeError("fetch failed")
+      return {
+        status: failure ?? 200,
+        text: JSON.stringify(failure ? { success: false, message: "unavailable" } : { success: true, data: SAMPLE }),
+      }
+    })
+    try {
+      const plugin = await ZenMuxBuilderAuthPlugin({}, {})
+      const usage = await plugin.auth.usage(async () => ({
+        type: "api", key: "fake-inference", metadata: { managementKey: "fake-management" },
+      }))
+      assert.equal(usage.signIn, "kept")
+      if (failure === null) assert.equal(usage.plan, "Builder Ultra")
+      else assert.equal(usage.windows.length, 0)
+    } finally {
+      restore()
+    }
+  }
 })

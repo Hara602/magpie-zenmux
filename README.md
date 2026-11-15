@@ -1,6 +1,6 @@
 # opencode-zenmux-auth
 
-[中文说明](docs/zh-CN.md) · [Windows install](docs/windows.md) · [Research notes](docs/research)
+[中文说明](docs/zh-CN.md) · [Windows install](docs/windows.md) · [Research notes](https://github.com/Hara602/magpie-zenmux/tree/main/docs/research)
 
 A provider plugin for [magpie](https://usemagpie.ai) (and OpenCode): **ZenMux's Builder Plan**.
 
@@ -66,12 +66,12 @@ from the provider's row.
   the reasoning levels `models.dev` lists for that model. The plugin asks ZenMux's
   public `GET /api/v1/models` (219 chat/image/video/audio models); the live catalogue
   fills only what `models.dev` leaves unsaid, plus every model `models.dev` does not
-  know (those get the plugin's three fallback levels, low / medium / high). Since 0.1.6
+  know (reasoning models get five fallback levels: low / medium / high / xhigh / max). Since 0.1.6
   the levels come from magpie's own `models.dev` snapshot (the file `magpie sync` names,
   `~/.cache/magpie/models.json` on every platform; read-only): no extra download, and
   nothing is sent anywhere. A snapshot that is
   missing, unreadable, or older than models.dev's level names falls back to the live
-  catalogue and the three levels. Only the models **your plan serves** are listed,
+  catalogue and the five levels. Only the models **your plan serves** are listed,
   because a model outside the plan answers `403`:
   - the plan is read from the Management API key's `subscription/detail` → `plan.tier`
     (`free` / `starter` / `pro` / `max` / `ultra`);
@@ -112,7 +112,10 @@ from the provider's row.
   mainstream models in turn. It costs a few tokens of one Flow, and these answers all
   count as a working key: `200`, `429`/`402` (the allowance is spent) and `400`/`404`/`422`
   (the key got through; the model or body was the problem). Only `401`, or a `403` whose
-  text does not name a model, is a refusal. `options.probeModel` pins the model tried.
+  text does not name a model, is an authentication refusal. Server errors, network
+  failures and empty catalogues fail verification without saving a sign-in.
+  Management endpoints are not used to guess inference access.
+  `options.probeModel` pins the model tried.
 - **No check-in** — ZenMux has no daily check-in, so the plugin implements no
   `auth.checkin`. It never writes files, never runs the vendor's CLI and sends
   requests only to `zenmux.ai` (or an override you set).
@@ -196,98 +199,42 @@ those 219 models). magpie has to show models an agent can actually call, so:
 Non-chat models are listed by default so the plan is fully visible; a *chat* request to one
 of them fails at ZenMux. `includeNonChat: false` hides them.
 
-### What ZenMux's docs actually say (and where I was wrong)
+## Reasoning levels
 
-From [Protocol Conversion Compatibility](https://zenmux.ai/docs/api/protocol-conversion.html):
+Choose a model and one of its reasoning levels, as in Codex. The plugin handles
+the protocol parameters and thinking budget internally.
 
-- **Reasoning / thinking is carried on every conversion** — the Support Overview table reads
-  All / All / All / All. No protocol is "unable" to carry an effort level.
-- **Chat <-> Responses pass the effort through unchanged** (`reasoning_effort` →
-  `reasoning.effort`, "Effort is passed through").
-- **Anything converted to Messages turns the effort into a budget**, and that mapping stops
-  at high: `low` / `medium` / `high` → 2048 / 5120 / 10240. There is no row for `max` or
-  `xhigh`, so such a level is lost on that path.
-- The docs say it plainly: "`reasoning_effort` and `thinking` are range mappings, not exact
-  token-limit preservation. If you need precise thinking budget control, prefer the target
-  protocol's native parameter."
+- A model with declared levels exposes those names, in their declared order.
+  For example, DeepSeek V4.1 Flash offers `low / high / max`.
+- A model whose metadata declares only a thinking toggle gets no invented
+  effort levels. A reasoning model with no level metadata uses
+  `low / medium / high / xhigh / max`.
+- On Chat and Responses, the selected name is sent unchanged as `reasoning_effort`
+  or `reasoning.effort`. `max` stays `max`; `xhigh` stays `xhigh`.
+- Magpie's original `x-magpie-effort` selection takes precedence over an effort
+  already changed by protocol translation. This private header is removed before
+  sending the request to ZenMux.
 
-So the rule the plugin follows is: use the protocol the model is **native** on (the
-catalogue's first `suitable_api`, no conversion at all), and keep reasoning models off
-Messages unless that is the only protocol they have. `max` is then sent as `max` — the
-vendor's own name — instead of being squeezed into a budget.
-
-For `deepseek/deepseek-v4.1-flash` that means **chat completions**, which is also what
-DeepSeek's own API documents (`reasoning_effort: low/high/max`). On that path nothing is
-converted, so `max` arrives as `max`.
-
-A model that ends up on Messages still gets a real budget, sized from the level
-(low/medium/high follow ZenMux's 2048/5120/10240, and anything above high gets 24576 or
-32768), capped at 80% of `max_tokens` because Anthropic requires `budget_tokens <
-max_tokens`.
-
-### Why a model is asked on the protocol it is (and not another)
-
-ZenMux lists a model on several endpoints, and the endpoints do *not* all accept a
-reasoning control. `deepseek/deepseek-v4.1-flash`, for example, has a Messages and a
-Responses endpoint that carry no `thinking` / `reasoning` parameter at all; only its
-`chat.completions` adapter accepts `reasoning_effort` and `thinking`. Routing it to
-Messages, as an earlier version did, threw the level away before the request even left
-magpie — that was the "max becomes high" bug.
-
-So the plugin now picks the protocol in this order:
-
-| Order | Protocol | Why |
-| --- | --- | --- |
-| 1 | Responses | magpie forwards `reasoning.effort` unchanged (`xhigh` works) |
-| 2 | chat completions | magpie forwards `reasoning_effort` as it came |
-| 3 | Messages | every request becomes `thinking:{type:"adaptive"}`; the level is lost, so it is a last resort |
-
-and, for a model that reasons, only among the endpoints whose adapter actually accepts a
-reasoning parameter (`reasoning_effort`, `reasoning`, `thinking`, `enable_thinking`,
-`thinking_budget`). A model whose endpoints accept none falls back to the catalogue order.
-
-The highest level of each protocol also carries an explicit
-`thinking: {type:"enabled", budget_tokens:N}`, because ZenMux's chat adapters accept a
-budget and the vendor otherwise infers one from `max_completion_tokens`.
-
-## Reasoning levels (why "max" used to become "high")
-
-magpie only translates the effort names `low` / `medium` / `high` for ZenMux's
-protocols. Anything else a client sends — `max`, `ultra`, a thinking budget — is clamped
-back to `high`, which is how picking **max** ended up as **high**. The plugin now makes
-the top level expressible instead:
-
-| Route | Levels offered | What the vendor receives |
-| --- | --- | --- |
-| Responses | `none` / `minimal` / `low` / `medium` / `high` / **`xhigh`** | `reasoning.effort: "xhigh"` |
-| Chat completions | `minimal` / `low` / `medium` / `high` | `reasoning_effort: "high"` (nothing above exists) |
-| Anthropic Messages | the levels models.dev names | `thinking: {type:"enabled", budget_tokens:N}` |
-
-The level is declared on the model as a variant carrying the vendor's own parameter, so
-magpie forwards it instead of guessing from a budget:
-
-```js
-variants: { low: { reasoningEffort: "low" }, high: { reasoningEffort: "high" },
-            xhigh: { reasoningEffort: "xhigh" } }   // Responses
-```
-
-A client's own top-level names (`max`, `ultra`, `xhigh`) are renamed to the vendor's top
-level rather than offered and then clamped. Chat completions have no level above `high`
-in ZenMux, so `max` collapses onto `high` there — that is the vendor's ceiling, not a bug.
-
-For Anthropic Messages, magpie always sends `thinking: {type:"adaptive"}` and drops the
-budget a client asked for. The plugin turns that back into a real budget:
+On Messages, an adaptive thinking field is converted to a budget:
 
 | Level | `budget_tokens` |
 | --- | --- |
+| none | thinking disabled |
+| minimal | 1024 |
 | low | 2048 |
-| medium | 8192 |
-| high | 16384 |
-| max / xhigh / unknown | 32768 |
+| medium | 5120 |
+| high | 10240 |
+| xhigh | 24576 |
+| max / ultra | 32768 |
 
-It never exceeds `max_tokens * 0.8` (Anthropic's own limit), and a budget the caller
-already set is left alone. `options.effort` (default `high`) picks the budget used when
-the level is not visible any more.
+Generated budgets normally use at most 80% of `max_tokens`, remain at least 1024,
+and always stay below `max_tokens`. Requests with `max_tokens <= 1024` disable
+thinking instead of creating an invalid budget. An explicit positive budget is
+preserved unless the selected level is `none`. `options.effort` defaults to `high`
+and is used only when the request carries no selected level.
+
+ZenMux's [protocol conversion documentation](https://zenmux.ai/docs/api/protocol-conversion.html)
+describes how efforts and budgets are mapped between protocols.
 
 ## Two ways to sign in
 
@@ -300,8 +247,10 @@ The OAuth method is the same flow ZenMux ships for OpenCode and DeepSeek Harness
 native client, `S256` PKCE, a callback on `127.0.0.1:<random port>/callback`, scope
 `inference:invoke offline_access`, and a refresh token that rotates on every renewal
 (magpie renews two minutes before expiry, one renewal at a time; `rotating: true` tells it
-the token is single-use). A rotation that comes back without a new refresh token means the
-sign-in is over, so the account is marked as needing a new one instead of retrying forever.
+the token is single-use). A refused refresh grant, or a successful rotation that returns
+an access token without a replacement refresh token, requires a new sign-in. HTTP 429,
+server errors, malformed responses and network failures remain retryable.
+Both successful and failed browser callbacks must match the sign-in's `state`.
 
 Either way, requests are signed with what the sign-in produced: an API key verbatim, or the
 OAuth account's access token.
@@ -313,22 +262,20 @@ account (`managementKey`), never replacing the token.
 ## Which API each model is asked on
 
 ZenMux serves one model over several protocols, and each is a different request
-shape. The plugin asks each model on the best protocol it speaks, in ZenMux's own
-order — the same order its official OpenCode plugin uses:
+shape. In `auto` mode the plugin follows the first supported protocol in the
+model's public `suitable_api` catalogue entry. Reasoning models prefer Chat or
+Responses over Messages, because the former can carry effort names directly.
+When the catalogue gives no preference, supported protocols are tried in this
+order: Responses, Chat, Messages.
 
-| Order | Protocol | Base | Why |
-| --- | --- | --- | --- |
-| 1 | Anthropic Messages (`@ai-sdk/anthropic`) | `/api/anthropic/v1` | the only protocol that carries `cache_control`, so prompt caching works |
-| 2 | OpenAI Responses (`@ai-sdk/openai`) | `/api/v1` | reasoning summaries and conversation state |
-| 3 | Chat completions (`@ai-sdk/openai-compatible`) | `/api/v1` | the only protocol every model speaks |
+| Protocol | SDK | Base |
+| --- | --- | --- |
+| Chat completions | `@ai-sdk/openai-compatible` | `/api/v1` |
+| OpenAI Responses | `@ai-sdk/openai` | `/api/v1` |
+| Anthropic Messages | `@ai-sdk/anthropic` | `/api/anthropic/v1` |
 
-The protocol comes from ZenMux's public catalogue
-(`/api/frontend/model/available/list`, each model's `suitable_api`). On the current
-catalogue that is 110 chat, 80 Messages and 28 Responses models out of 218.
-
-61 of the chat models — including `deepseek/deepseek-v4.1-flash` and
-`qwen/qwen3.8-max-0902` — speak **only** chat completions, so they stay there; a
-Responses-only default would have broken them.
+A model that only lists Chat stays on Chat, including when a Codex client calls
+Magpie's Responses endpoint.
 
 `options.protocol`:
 
@@ -347,8 +294,9 @@ streamed chat requests so a streamed turn still reports its tokens.
 
 ## Options
 
-`plugins.json` options, e.g. `magpie plugin options zenmux '{"plan":"pro"}'` when the
-plugin is added through the app; a folder entry can also carry `"options"`:
+Use the installed plugin's name, for example
+`magpie plugin options magpie-plugin '{"plan":"pro"}'` for this local folder.
+A `plugins.json` folder entry can also carry `"options"`:
 
 ```json
 { "spec": "/path/opencode-zenmux-auth", "options": {
@@ -362,6 +310,12 @@ plugin is added through the app; a folder entry can also carry `"options"`:
     "effort": "high",             // Messages: budget when the level is lost (low|medium|high|max)
 } }
 ```
+
+The plan filter, `models`, `exclude` and `includeNonChat` all apply together;
+an exclusion always wins. A valid empty result stays empty. A catalogue outage
+falls back to known models while retaining the explicit model filters.
+Model, plan, quota and sign-in requests honor cancellation and have a 30-second
+timeout per HTTP request.
 
 ## Testing
 
@@ -387,10 +341,11 @@ ZENMUX_MANAGEMENT_API_BASE=http://127.0.0.1:3599/api/v1/management \
 ZENMUX_PUBLIC_API_BASE=http://127.0.0.1:3599/api m quota
 ```
 
-`magpie provider test zenmux` shows `chat ✓`, `responses ✓` on real ZenMux, and
-`anthropic ✗`/`gemini ✗` — that command probes `provider/api` (`…/api/v1`) for every
-protocol, while ZenMux's Anthropic and Vertex endpoints live at `/api/anthropic/v1` and
-`/api/vertex-ai`. Agents still use chat, so nothing is missing.
+Some Magpie versions probe every protocol at the provider's base when running
+`magpie provider test zenmux`. An Anthropic or Gemini 404 at `/api/v1` can therefore
+be a probe-path mismatch: ZenMux serves those protocols at `/api/anthropic/v1` and
+`/api/vertex-ai`. Agents use each model's configured protocol and base; verify an
+actual request to the model when diagnosing a protocol error.
 
 ## DSH web search
 
